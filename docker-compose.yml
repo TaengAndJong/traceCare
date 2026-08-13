@@ -1,0 +1,16 @@
+services:
+  db:
+    image: pgvector/pgvector:pg18
+    container_name: tracecare-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: tracecare
+      POSTGRES_USER: tracecare
+      POSTGRES_PASSWORD: java
+    ports:
+      - "5433:5432"
+    volumes:
+      - tracecare_pgdata:/var/lib/postgresql
+
+volumes:
+  tracecare_pgdata:

@@ -1,0 +1,112 @@
+########################################
+# 공통: 민감정보 / 환경설정
+# (모든 서비스 공통 — 절대 커밋 금지)
+########################################
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.jks
+*.keystore
+firebase-service-account*.json
+google-services.json
+GoogleService-Info.plist
+
+########################################
+# 공통: OS / 에디터
+########################################
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# IntelliJ (기획서상 Backend 개발환경)
+.idea/
+*.iml
+out/
+
+# VSCode
+.vscode/
+!.vscode/extensions.json
+
+# Eclipse
+.project
+.classpath
+.settings/
+
+########################################
+# 공통: 로그
+########################################
+*.log
+logs/
+
+########################################
+# apps/backend (Java / Spring Boot, Gradle)
+########################################
+apps/backend/.gradle/
+apps/backend/build/
+!apps/backend/gradle/wrapper/gradle-wrapper.jar
+
+# Spring Boot
+apps/backend/HELP.md
+apps/backend/*.log
+
+# 컴파일 산출물
+apps/backend/**/*.class
+
+########################################
+# apps/frontend (Flutter / Dart)
+########################################
+apps/frontend/.dart_tool/
+apps/frontend/.flutter-plugins
+apps/frontend/.flutter-plugins-dependencies
+apps/frontend/.packages
+apps/frontend/.pub-cache/
+apps/frontend/.pub/
+apps/frontend/build/
+
+# Android
+apps/frontend/android/**/gradle-wrapper.jar
+apps/frontend/android/.gradle/
+apps/frontend/android/captures/
+apps/frontend/android/local.properties
+apps/frontend/android/key.properties
+apps/frontend/**/*.keystore
+apps/frontend/**/*.jks
+
+# iOS
+apps/frontend/ios/Flutter/Flutter.framework
+apps/frontend/ios/Flutter/Flutter.podspec
+apps/frontend/ios/Pods/
+apps/frontend/ios/.symlinks/
+apps/frontend/ios/Runner.xcworkspace/xcshareddata/
+
+########################################
+# apps/ai-server (Python / FastAPI)
+########################################
+apps/ai-server/__pycache__/
+apps/ai-server/*.pyc
+apps/ai-server/.venv/
+apps/ai-server/venv/
+apps/ai-server/env/
+apps/ai-server/.pytest_cache/
+apps/ai-server/.mypy_cache/
+apps/ai-server/*.egg-info/
+
+# 학습된 모델 산출물
+# 정책: 완전 제외 (학습 스크립트로 재현 가능, 재학습 부담이 커지면 Git LFS로 전환 검토)
+apps/ai-server/models/*.pkl
+apps/ai-server/models/*.joblib
+apps/ai-server/models/*.h5
+
+########################################
+# Docker
+########################################
+docker-compose.override.yml
+
+########################################
+# Jenkins (CI 산출물, 로컬 실행 시 생성될 수 있음)
+########################################
+.jenkins/
