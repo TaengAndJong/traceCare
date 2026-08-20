@@ -12,5 +12,25 @@ services:
     volumes:
       - tracecare_pgdata:/var/lib/postgresql
 
+  redis:
+    image: redis:7.4-alpine
+    container_name: tracecare-redis
+    restart: unless-stopped
+    # apps/backend/.env.example의 REDIS_HOST=localhost, REDIS_PORT=6379와 매칭.
+    # 로컬 개발 단계라 requirepass 없이 노출하지만, 운영 배포 시에는 반드시
+    # --requirepass 옵션(또는 redis.conf)으로 인증을 걸고 포트도 외부 노출하지 않는다
+    # (docs/security/OWASP_Security_Guide.md §2 Security Misconfiguration 참고).
+    ports:
+      - "6379:6379"
+    volumes:
+      - tracecare_redisdata:/data
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
 volumes:
   tracecare_pgdata:
+  tracecare_redisdata:

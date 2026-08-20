@@ -1,7 +1,8 @@
 # Backend Exception Handling Rule
+>해당파일 경로  docs/backend/Exception_Handling_Rule.md
 
 프로젝트: 아이·노인 케어 위치추적 알림 시스템 (GIS)
-문서 위치: `docs/backend/exception-handling-rule.md`
+문서 위치: `docs/backend/Exception_Handling_Rule.md`
 담당 서버: Spring Boot Backend (Guardian / CareTarget 관리, 인증, 위치, 알림)
 버전: v1.0 (작성일 2026-08-06)
 
@@ -101,7 +102,7 @@ GlobalExceptionHandler (@RestControllerAdvice)
 ### 3.2 패키지 구조 (제안)
 
 ```
-com.gis.backend
+com.tracecare.backend
  └─ common
      └─ exception
          ├─ GlobalExceptionHandler.java      # @RestControllerAdvice
@@ -115,6 +116,9 @@ com.gis.backend
          ├─ business
          │   ├─ CareTargetNotFoundException.java
          │   ├─ PlaceNotFoundException.java
+         │   ├─ VisitHistoryNotFoundException.java
+         │   ├─ ArrivalNotRegisteredException.java   # GeoFence 반경 밖 도착 확인 (ARRIVAL_002)
+         │   ├─ EmergencyContactMissingException.java # 등록된 보호자 연락처 없음 (EMERGENCY_002)
          │   └─ DuplicateResourceException.java
          ├─ external
          │   ├─ ExternalApiException.java     # Google API, FCM 공통
@@ -148,30 +152,32 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiResponse<Void>> handleValidation(MethodArgumentNotValidException e) {
         // 필드별 오류 메시지 수집 (6장)
-        return ApiResponse.fail(ErrorCode.INVALID_INPUT_VALUE, e); // 응답 포맷은 API Response Rule 따름
+        return ApiResponse.error(ErrorCode.COMMON_002, e); // 응답 포맷은 API Response Rule 따름
     }
 
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<ApiResponse<Void>> handleBusiness(BusinessException e) {
         log.warn("[BUSINESS_EXCEPTION] code={}, message={}", e.getErrorCode(), e.getMessage());
-        return ApiResponse.fail(e.getErrorCode());
+        return ApiResponse.error(e.getErrorCode());
     }
 
     @ExceptionHandler(ExternalApiException.class)
     public ResponseEntity<ApiResponse<Void>> handleExternal(ExternalApiException e) {
         log.error("[EXTERNAL_API_EXCEPTION] target={}, code={}", e.getTargetService(), e.getErrorCode(), e);
-        return ApiResponse.fail(e.getErrorCode());
+        return ApiResponse.error(e.getErrorCode());
     }
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Void>> handleUnexpected(Exception e) {
         log.error("[UNHANDLED_EXCEPTION]", e); // 스택 트레이스는 서버 로그에만 기록
-        return ApiResponse.fail(ErrorCode.INTERNAL_SERVER_ERROR);
+        return ApiResponse.error(ErrorCode.COMMON_001);
     }
 }
 ```
 
-`ApiResponse.fail(...)`의 실제 JSON 구조, HTTP Status 매핑, ErrorCode 값 체계는 API Response Rule 문서를 따른다. 본 문서는 "어떤 예외가 어떤 ErrorCode로 변환되는가"의 규칙만 정의한다.
+`ApiResponse.error(...)`의 실제 JSON 구조, HTTP Status 매핑, ErrorCode 값 체계는 API Response Rule 문서를 따른다. 본 문서는 "어떤 예외가 어떤 ErrorCode로 변환되는가"의 규칙만 정의한다.
+
+> **ErrorCode 네이밍 주의**: `ErrorCode`는 서술형 이름(`INVALID_INPUT_VALUE` 등)이 아니라 API Response Rule §5.1의 `{도메인}_{3자리}` 값(`COMMON_002`, `AUTH_002` 등)을 그대로 사용하는 Enum이다. 이 문서의 모든 예시 코드는 이 값으로 통일했다 — 새 ErrorCode가 필요하면 이 문서가 아니라 API Response Rule §5.2 표에 먼저 추가한다.
 
 ---
 
@@ -180,19 +186,22 @@ public class GlobalExceptionHandler {
 ```
 RuntimeException
  └─ BusinessException (abstract, 최상위 커스텀 예외)
-     ├─ ErrorCode errorCode        // API Response Rule의 Error Code Enum 참조
+     ├─ ErrorCode errorCode        // API Response Rule의 Error Code Enum 참조 (예: TARGET_001, PLACE_002)
      ├─ HttpStatus httpStatus
      │
-     ├─ InvalidRequestException          (400)  # 6장
-     ├─ AuthenticationFailedException     (401)  # 8장
-     ├─ AccessDeniedCustomException       (403)  # 8장
+     ├─ InvalidRequestException          (400)  # 6장 — 주로 COMMON_002, 도메인별 400(LOCATION_001, PLACE_003, ARRIVAL_002 등)
+     ├─ AuthenticationFailedException     (401)  # 8장 — AUTH_001~AUTH_006
+     ├─ AccessDeniedCustomException       (403)  # 8장 3단계(리소스 소유권)만 대상 — TARGET_002, LOCATION_003/004, ARRIVAL_001, EMERGENCY_001. GUARDIAN_001(Role 불일치, 2단계)은 Filter의 AccessDeniedHandler가 직접 처리하므로 이 예외 클래스를 거치지 않는다
      ├─ ResourceNotFoundException         (404)
-     │    ├─ CareTargetNotFoundException
-     │    └─ PlaceNotFoundException
-     ├─ DuplicateResourceException        (409)
-     ├─ ExternalApiException              (502/504)  # 9장
+     │    ├─ CareTargetNotFoundException       # TARGET_001
+     │    ├─ PlaceNotFoundException             # PLACE_001
+     │    ├─ VisitHistoryNotFoundException      # VISIT_001
+     │    └─ ArrivalHistoryNotFoundException    # ARRIVAL_003
+     ├─ DuplicateResourceException        (409)  # TARGET_003, PLACE_002, USER_002, USER_004
+     ├─ ExternalApiException              (500)  # 9장 — AI_001, AI_002, NOTI_002
      │    └─ AiServerException
-     └─ DataAccessCustomException         (500)  # 10장
+     ├─ EmergencyDispatchException        (500)  # 9장 — EMERGENCY_003, fail-safe 대상(9.2 참고)
+     └─ DataAccessCustomException         (500)  # 10장 — COMMON_001
 ```
 
 **설계 원칙**
@@ -243,7 +252,7 @@ public abstract class BusinessException extends RuntimeException {
 ```java
 public class CareTargetNotFoundException extends BusinessException {
     public CareTargetNotFoundException(Long careTargetId) {
-        super(ErrorCode.CARE_TARGET_NOT_FOUND);
+        super(ErrorCode.TARGET_001);
         // 상세 원인은 서버 로그에서만 careTargetId로 추적 (응답 메시지에는 미포함)
     }
 }
@@ -261,12 +270,12 @@ public class CareTargetNotFoundException extends BusinessException {
 
 ### 6.2 처리 기준
 
-| 항목 | 기준 |
-|---|---|
-| 위치 | Controller 진입 시점, DTO 계층에서 Bean Validation(`@NotNull`, `@Email`, `@Pattern` 등)으로 1차 방어 |
-| 응답 | 단일 ErrorCode(`INVALID_INPUT_VALUE`) + 필드별 오류 목록(field, reason)을 함께 반환. 필드 오류 목록의 JSON 위치/키 이름은 API Response Rule의 실패 응답 구조를 따른다 |
-| 좌표(GPS)/GeoFence 값 | 위경도 범위, 반경(radius) 최소/최대값 등 GIS 특화 검증은 Custom Validator(`@ConstraintValidator`)로 구현하여 Service 로직에서 재검증하지 않도록 한다 |
-| 서버 로그 | 어떤 필드가 어떤 값 형식으로 실패했는지만 기록하고, 요청 바디 전체를 로그로 남기지 않는다 |
+| 항목 | 기준                                                                                                                                                         |
+|---|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 위치 | Controller 진입 시점, DTO 계층에서 Bean Validation(`@NotNull`, `@Email`, `@Pattern` 등)으로 1차 방어                                                         |
+| 응답 | 단일 ErrorCode(`COMMON_002`) + 필드별 오류 목록(field, reason)을 함께 반환. 필드 오류 목록의 JSON 위치/키 이름은 API Response Rule의 실패 응답 구조를 따른다 |
+| 좌표(GPS)/GeoFence 값 | 위경도 범위, 반경(radius) 최소/최대값 등 GIS 특화 검증은 Custom Validator(`@ConstraintValidator`)로 구현하여 Service 로직에서 재검증하지 않도록 한다         |
+| 서버 로그 | 어떤 필드가 어떤 값 형식으로 실패했는지만 기록하고, 요청 바디 전체를 로그로 남기지 않는다                                                                    |
 
 ### 6.3 예시
 
@@ -277,7 +286,7 @@ public ResponseEntity<ApiResponse<Void>> handleValidation(MethodArgumentNotValid
         .map(fe -> new FieldErrorDetail(fe.getField(), fe.getDefaultMessage()))
         .toList();
     log.warn("[VALIDATION_FAILED] fields={}", errors.stream().map(FieldErrorDetail::field).toList());
-    return ApiResponse.fail(ErrorCode.INVALID_INPUT_VALUE, errors);
+    return ApiResponse.error(ErrorCode.COMMON_002, errors);
 }
 ```
 
@@ -291,10 +300,13 @@ DB/외부 연동 오류가 아닌, **도메인 규칙 위반**에 해당하는 �
 
 | 도메인 | 예시 |
 |---|---|
-| Guardian/CareTarget | 이미 연결된 보호대상자 중복 등록, 보호자당 등록 가능 인원 초과 |
-| Place(안심구역) | 동일 좌표 반경 내 중복 등록, GeoFence 반경 정책 위반 |
-| 위치/알림 | 이미 처리된 알림 재처리 요청, 존재하지 않는 위치 이력 조회 |
-| AI 리포트 | 예측 대상 CareTarget의 최소 이동 데이터 미충족 |
+| Guardian/CareTarget | 이미 연결된 보호대상자 중복 등록(`TARGET_003`), 보호자당 등록 가능 인원 초과 |
+| Place(안심구역) | 동일 좌표 반경 내 중복 등록(`PLACE_002`), GeoFence 반경 정책 위반(`PLACE_003`) |
+| 위치/알림 | 이미 처리된 알림 재처리 요청, 존재하지 않는 위치 이력 조회(`LOCATION_002`) |
+| 방문 히스토리 | 조회 조건에 해당하는 방문 이력 없음(`VISIT_001`), 조회 기간 값 오류(`VISIT_002`) |
+| 도착 확인 | GeoFence 반경 밖에서 도착 확인 시도(`ARRIVAL_002`), 도착 기록 없음(`ARRIVAL_003`) |
+| 긴급 연락 | 등록된 보호자 연락처 없음(`EMERGENCY_002`) — 발송 자체 실패는 Business Exception이 아니라 9장 External Service Exception(`EMERGENCY_003`) 대상 |
+| AI 리포트 | 예측 대상 CareTarget의 최소 이동 데이터 미충족(`AI_003`) |
 
 ### 7.2 처리 기준
 
@@ -310,28 +322,34 @@ DB/외부 연동 오류가 아닌, **도메인 규칙 위반**에 해당하는 �
 
 ### 8.1 처리해야 하는 지점
 
-Spring Security의 Filter는 `DispatcherServlet` 이전에 동작하므로, `@RestControllerAdvice`(GlobalExceptionHandler)가 Filter 단계의 예외를 직접 잡을 수 없다. 이 프로젝트는 아래 2단계로 나눠 처리한다.
+Spring Security의 Filter는 `DispatcherServlet` 이전에 동작하므로, `@RestControllerAdvice`(GlobalExceptionHandler)가 Filter 단계의 예외를 직접 잡을 수 없다. `docs/security/Security_Guide.md` §2.7/§4.5가 이미 확정한 3단계 인가 구조에 따라 이 프로젝트는 아래처럼 나눠 처리한다 — **1·2단계는 Filter 단계, 3단계만 Service/GlobalExceptionHandler 단계**라는 점이 핵심이다.
 
 | 단계 | 발생 위치 | 처리 방식 |
 |---|---|---|
-| Filter 단계 (JWT 검증) | `JwtAuthenticationFilter` 내부에서 토큰 만료/위변조 발생 | Filter 내부에서 직접 catch 후, Security의 `AuthenticationEntryPoint` / `AccessDeniedHandler`를 통해 API Response Rule 포맷으로 즉시 응답. GlobalExceptionHandler로 전파되지 않음 |
-| Controller/Service 단계 | Role 검사 실패, 리소스 소유자 불일치(다른 보호자의 CareTarget 접근 등) | Custom Exception(`AccessDeniedCustomException`) throw → GlobalExceptionHandler에서 처리 |
+| 1단계: 인증 (JWT 검증) | `JwtAuthenticationFilter` 내부에서 토큰 없음/만료/위변조/Blacklist 발생 | Filter 내부에서 직접 catch 후 `AuthenticationEntryPoint`가 API Response Rule 포맷으로 즉시 응답. GlobalExceptionHandler로 전파되지 않음 |
+| 2단계: Role 인가 | `authorizeHttpRequests()` URL 패턴(`/api/guardian/**` 등)에서 Role 불일치 발생 | `AuthorizationFilter`가 던진 `AccessDeniedException`을 `AccessDeniedHandler`가 API Response Rule 포맷으로 즉시 응답. GlobalExceptionHandler로 전파되지 않음(Security_Guide.md §2.7) |
+| 3단계: 리소스 소유권 검증 | 다른 보호자의 CareTarget/Place 접근처럼 DB 관계 조회가 필요한 경우 | Service 계층 코드에서 직접 확인 후 Custom Exception(`AccessDeniedCustomException`) throw → `GlobalExceptionHandler`에서 처리(Security_Guide.md §4.5 — 이 검증은 Spring Security의 선언적 기능만으로 처리하지 않고 반드시 Service 계층 코드로 명시한다) |
+
+> Security_Guide.md §4.4는 단순 Role 검사(2단계)는 URL 패턴(`authorizeHttpRequests`)으로 처리하고, `@PreAuthorize`는 URL로 표현 안 되는 파라미터 기반 조건에만 쓰도록 규정한다. 즉 2단계에 `@PreAuthorize`를 중복 적용하지 않는다 — 적용한다면 그 예외 역시 `AccessDeniedHandler`가 처리하며(Spring Security 기본 동작), `GlobalExceptionHandler`로는 오지 않는다.
 
 ### 8.2 ErrorCode 구분 기준
 
 | 상황 | HTTP Status | 구분 이유 |
 |---|---|---|
-| Access Token 없음/형식 오류 | 401 | 인증 자체가 안 된 상태 |
-| Access Token 만료 | 401 (별도 ErrorCode 권장: `TOKEN_EXPIRED`) | Flutter 클라이언트가 이 코드를 받으면 자동으로 `/api/auth/refresh` 재시도 |
-| Refresh Token 만료/Redis Blacklist 등록됨 | 401 | 재로그인 필요, refresh 재시도 금지 |
-| 인증은 됐으나 Role 불일치 (Guardian 전용 API에 CareTarget 접근 등) | 403 | 8.1 참고 |
-| 인증은 됐으나 리소스 소유자 불일치 (타인의 CareTarget/Place 접근) | 403 | 인가 실패이지만 존재 여부 노출 방지를 위해 404 대신 403 사용을 원칙으로 하되, 리소스 존재 자체를 숨겨야 하는 민감 데이터는 404로 응답하는 것도 허용 |
+| Access Token 없음/형식 오류 | 401 (`AUTH_001`) | 인증 자체가 안 된 상태 |
+| Access Token 만료 | 401 (`AUTH_002`) | Flutter 클라이언트가 이 코드를 받으면 자동으로 `/api/auth/refresh` 재시도. 별도 코드를 새로 만들 필요 없이 API Response Rule에 이미 정의된 `AUTH_002`를 그대로 쓴다 |
+| Access Token 위변조/서명 검증 실패 | 401 (`AUTH_003`) | 인증 자체가 무효 |
+| Refresh Token 만료 | 401 (`AUTH_004`) | 재로그인 필요, refresh 재시도 금지 |
+| 로그아웃/탈퇴로 JWT Blacklist 등록됨 | 401 (`AUTH_006`) | 위와 별도 원인이므로 다른 코드로 구분 |
+| 인증은 됐으나 Role 불일치 (Guardian 전용 API에 CareTarget 접근 등) | 403 (`GUARDIAN_001`) | Filter 단계(`AccessDeniedHandler`)에서 응답, `GlobalExceptionHandler`를 거치지 않음 — 8.1 1단계 표 참고 |
+| 인증은 됐으나 리소스 소유자 불일치 (타인의 CareTarget/Place 접근) | **403 고정** (`TARGET_002` 등) | API Response Rule §4.1이 "3단계 리소스 접근 제어 = 403"을 이 프로젝트의 핵심 판단 기준으로 이미 확정했으므로, 리소스 존재 여부를 숨기고 싶다는 이유로 404로 대체하지 않는다. 예외를 두지 않는다. Service 계층 → `GlobalExceptionHandler` 경로(8.1 3단계 표 참고) |
 
 ### 8.3 원칙
 
-- `TOKEN_EXPIRED`와 일반 `UNAUTHORIZED`를 반드시 다른 ErrorCode로 분리한다. Flutter 클라이언트의 자동 재발급 로직이 이 값에 의존하기 때문이다.
+- `AUTH_002`(Access Token 만료)와 `AUTH_001`(일반 인증 필요)을 반드시 다른 ErrorCode로 유지한다. Flutter 클라이언트의 자동 재발급 로직이 `AUTH_002` 값에 의존하기 때문이다.
 - 인증/인가 실패 응답에는 "왜 실패했는지"에 대한 내부 판단 근거(예: 어떤 Role이 필요했는지, 토큰의 payload 내용)를 포함하지 않는다.
 - Role/권한 관련 상세 정책(어떤 API가 Guardian 전용인지 등)은 Spring Security Guide 문서를 참고하며, 본 문서에서 중복 정의하지 않는다.
+- **(확정)** 이전 검토에서 "Role 검사 실패가 Filter 단계인지 Controller/Service 단계인지" 열어뒀던 부분은 `Security_Guide.md` §2.7·§4.4·§4.5로 확정됐다: **1단계(인증)·2단계(Role 인가)는 URL 패턴(`authorizeHttpRequests`) 기반 Filter 단계에서 끝나고 `AccessDeniedHandler`가 처리, `GlobalExceptionHandler`는 3단계(리소스 소유권, Service 계층에서 DB 관계를 조회해야 하는 경우)만 처리**한다. `@PreAuthorize`는 2단계 Role 검사에 중복 적용하지 않고, URL로 표현 안 되는 파라미터 기반 조건에만 제한적으로 쓴다(Security_Guide.md §4.4). 8.1절 표를 이 기준으로 확정했다.
 
 ---
 
@@ -355,15 +373,20 @@ Spring Security의 Filter는 `DispatcherServlet` 이전에 동작하므로, `@Re
 | Timeout 명시 | 모든 외부 API 호출(WebClient/RestClient)에 connect/read timeout을 반드시 설정한다. 무한 대기로 인한 스레드 고갈을 방지한다 |
 | 예외 변환 | 외부 클라이언트가 던지는 저수준 예외(`WebClientResponseException`, `TimeoutException` 등)를 Service 경계에서 `ExternalApiException`/`AiServerException`으로 변환해 상위로 던진다. 원본 예외 타입이 Controller까지 노출되지 않게 한다 |
 | 재시도 정책 | 일시 장애(Timeout, 5xx) 성격의 호출은 제한된 횟수의 재시도(exponential backoff)를 적용하고, 최종 실패 시에만 예외를 던진다. 인증성 실패(4xx)는 재시도하지 않는다 |
-| Fallback | FCM 발송 실패, Google Places 캐시 미스 등 사용자 경험에 치명적이지 않은 영역은 예외를 던지는 대신 기본값/캐시 데이터로 대체하는 것을 우선 검토한다 |
+| Fallback | FCM 발송 실패, Google Places 캐시 미스 등 사용자 경험에 치명적이지 않은 영역은 예외를 던지는 대신 기본값/캐시 데이터로 대체하는 것을 우선 검토한다. **단, 알림 타입이 `EMERGENCY`(긴급 연락)인 경우는 이 Fallback 대상에서 제외한다** — `NotificationHistory.status='FAILED'`로 반드시 이력을 남기고, 일반화된 500 응답(`COMMON_001`)이 아니라 `EMERGENCY_003`을 그대로 클라이언트에 노출해 재시도/대체 수단 안내가 가능하게 한다(fail-open 금지, `DATABASE_DESIGN_GUIDE.md` 3.7절 및 API Response Rule §5.2 EMERGENCY 도메인과 연동) |
 
 ### 9.3 ErrorCode/HTTP Status 매핑
 
-| 상황 | HTTP Status |
-|---|---|
-| 외부 서비스가 명시적 오류 응답 (4xx) | 502 (Bad Gateway) — 클라이언트 요청 자체는 유효했으므로 400대신 502 사용 |
-| 외부 서비스 Timeout / 무응답 | 504 (Gateway Timeout) |
-| 외부 서비스 자체 다운 (Connection Refused 등) | 503 (Service Unavailable) |
+API Response Rule이 이미 확정한 대로 외부 연동 실패는 502/503/504로 세분화하지 않고 **500으로 통일**한다. 대신 어떤 외부 서비스가 실패했는지는 HTTP Status가 아니라 `ErrorCode`로 구분한다.
+
+| 상황 | HTTP Status | ErrorCode |
+|---|---|---|
+| FastAPI(AI 예측 서버) 응답 없음/타임아웃 | 500 | `AI_001` |
+| LLM API 호출 실패 | 500 | `AI_002` |
+| FCM 발송 실패(EMERGENCY 제외, 9.2 참고) | 500 | `NOTI_002` |
+| 긴급 연락(EMERGENCY) 발송 자체 실패 | 500 | `EMERGENCY_003` |
+
+> Google OAuth2 실패(로그인 시점)는 외부 연동이지만 인증 흐름의 일부이므로 예외적으로 401(`AUTH_005`)을 유지한다 — API Response Rule §5.2 AUTH 도메인 참고.
 
 ### 9.4 예시
 
@@ -385,7 +408,7 @@ public class AiServerException extends BusinessException {
 try {
     return aiServerClient.requestPrediction(careTargetId);
 } catch (WebClientResponseException | WebClientRequestException e) {
-    throw new AiServerException("fastapi-ai-server", ErrorCode.AI_SERVER_UNAVAILABLE);
+    throw new AiServerException("fastapi-ai-server", ErrorCode.AI_001);
 }
 ```
 
@@ -417,7 +440,7 @@ try {
     return placeRepository.save(place);
 } catch (DataIntegrityViolationException e) {
     log.warn("[DUPLICATE_PLACE] guardianId={}", guardianId);
-    throw new DuplicateResourceException(ErrorCode.PLACE_ALREADY_EXISTS);
+    throw new DuplicateResourceException(ErrorCode.PLACE_002);
 }
 ```
 
@@ -489,7 +512,7 @@ Redis는 최신 위치, FCM Token, JWT Blacklist, 각종 캐시(9장 외부 서�
 | ErrorCode Enum의 값 체계, 코드 네이밍 규칙, 코드-메시지 관리 방식 | API Response Rule |
 | 실패 응답의 JSON 필드 구조 (success, code, message, data 등) | API Response Rule |
 | HTTP Status와 필드 값의 매핑 규칙 | API Response Rule |
-| GlobalExceptionHandler가 최종적으로 어떤 객체를 리턴하는가 (`ApiResponse.fail(...)`) | 본 문서는 호출 지점만 정의, 객체 스펙은 API Response Rule |
+| GlobalExceptionHandler가 최종적으로 어떤 객체를 리턴하는가 (`ApiResponse.error(...)`) | 본 문서는 호출 지점만 정의, 객체 스펙은 API Response Rule |
 
 즉, GlobalExceptionHandler의 각 `@ExceptionHandler`는 "이 예외 → 이 ErrorCode"라는 매핑만 책임지고, 그 ErrorCode를 실제 HTTP 응답으로 직렬화하는 방식은 API Response Rule의 `ApiResponse` 구조를 그대로 사용한다.
 
@@ -497,12 +520,17 @@ Redis는 최신 위치, FCM Token, JWT Blacklist, 각종 캐시(9장 외부 서�
 
 ## 14. 구현 체크리스트
 
-- [ ] `common.exception` 패키지 하에 `BusinessException` 및 하위 계층 구조 생성
+- [ ] `common.exception` 패키지 하에 `BusinessException` 및 하위 계층 구조 생성 (VISIT/ARRIVAL/EMERGENCY 도메인 포함)
 - [ ] `GlobalExceptionHandler`에 우선순위(3.3)에 따라 `@ExceptionHandler` 등록
+- [ ] 모든 `ErrorCode` Enum 값이 API Response Rule §5.2 표의 `{도메인}_{3자리}` 코드와 1:1 일치하는지 확인 (서술형 이름 사용 금지)
 - [ ] Validation 실패 시 필드별 오류 목록 반환 구조 구현 (API Response Rule 포맷 준수)
 - [ ] JWT 인증 실패(Filter 단계)를 `AuthenticationEntryPoint`/`AccessDeniedHandler`로 처리해 API Response Rule 포맷과 일치시킴 (Spring Security Guide와 연계 확인)
-- [ ] `TOKEN_EXPIRED`와 일반 `UNAUTHORIZED` ErrorCode 분리
-- [ ] FastAPI/Google API/FCM 호출부에 timeout, 재시도, 예외 변환(`ExternalApiException`) 적용
+- [ ] `AUTH_002`(Access Token 만료)와 `AUTH_001`(일반 인증 필요)이 다른 코드로 응답되는지 확인
+- [ ] Role 인가(2단계)는 `authorizeHttpRequests()` URL 패턴으로 Filter 단계에서 끝나고, `@PreAuthorize`로 중복 적용하지 않았는지 확인(Security_Guide.md §4.4, 8.1절 확정 사항)
+- [ ] 리소스 소유권 검증(3단계)만 Service 계층에서 `AccessDeniedCustomException`을 던져 `GlobalExceptionHandler`로 가는지 확인 — Role 불일치(`GUARDIAN_001`)가 이 예외 클래스를 거치지 않고 `AccessDeniedHandler`에서 바로 처리되는지 확인
+- [ ] 리소스 소유권 불일치는 예외 없이 항상 403으로 응답하는지 확인 (404 대체 금지)
+- [ ] FastAPI/Google API/FCM 호출부에 timeout, 재시도, 예외 변환(`ExternalApiException`) 적용, HTTP Status는 502/503/504가 아닌 500으로 통일
+- [ ] EMERGENCY(긴급 연락) 알림은 9.2절 Fallback 대상에서 제외되어 실패 시 반드시 이력이 남고 `EMERGENCY_003`이 그대로 노출되는지 확인
 - [ ] Redis 장애 시 캐시성 데이터는 DB 폴백, 보안성 데이터(Blacklist 등)는 명시적 실패 처리로 분기
 - [ ] Repository 계층 예외를 Service 계층에서 도메인 예외로 변환
 - [ ] `@Transactional` 범위에서 외부 I/O(FCM, LLM, Google API) 제외 확인

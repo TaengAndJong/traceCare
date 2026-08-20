@@ -1,10 +1,13 @@
 # OWASP Top 10 Security Analysis
+>해당파일 경로 docs/security/OWASP_Security_Guide.md
 
 프로젝트: 아이·노인 케어 위치추적 알림 시스템 (GIS)
-문서 위치: `docs/backend/OWASP_Security_Guide.md`
+문서 위치: `docs/security/OWASP_Security_Guide.md`
 기준: OWASP Top 10:2025 (2026년 1월 정식 발표본, https://owasp.org/Top10/2025/)
 용도: 구현 및 코드 리뷰 시 참고하는 보안 점검 기준 문서
-버전: v1.0 (작성일 2026-08-06)
+버전: v1.1 (작성일 2026-08-06, 개정일 2026-08-14)
+
+> **v1.1 변경 이력**: Security_Guide.md v1.1에 추가된 WebSocket 연결·구독 보안(7.5) 반영. WebSocket 구독(SUBSCRIBE) 시점의 리소스 소유권 미검증은 REST의 Broken Access Control(IDOR)과 동일한 근본 원인이므로 A01 항목에 위험 요소·대응·체크리스트를 보강.
 
 > 이 문서는 **OWASP Top 10 항목별 취약점 진단·대응·점검 체크리스트**를 담당한다.
 > 인증/인가 아키텍처의 상세 설계(Filter Chain, JWT 정책, RBAC 구조)는 **Security_Guide.md**, 예외 처리 구현 상세(GlobalExceptionHandler, Custom Exception 계층)는 **Exception Handling Rule** 문서를 따른다. 본 문서는 두 문서를 전제로 "OWASP 관점에서 무엇을 점검해야 하는가"에 집중하며, 이미 정의된 설계를 다시 상세히 설명하지 않고 참조로 연결한다.
@@ -52,7 +55,7 @@ OWASP Top 10은 2026년 1월 `2025` 버전으로 개정되었다. 기존 2021 �
 
 - **발생 원인**: 인증(누구인지)과 인가(무엇을 할 수 있는지)를 혼동하거나, 인가 검증을 클라이언트단(UI 메뉴 숨김)에만 의존하고 서버가 실제로 권한을 검증하지 않을 때 발생한다. 2025년 개정판부터는 SSRF(서버가 신뢰 없이 사용자 입력 URL을 그대로 요청하는 결함)도 "서버가 접근해서는 안 될 리소스에 접근했다"는 동일한 근본 원인으로 묶여 이 카테고리에 포함된다.
 - **공격자가 악용하는 방식**: URL/경로의 리소스 ID(`/api/guardian/care-targets/{id}`)를 다른 값으로 바꿔 접근(IDOR), Role 검사가 없는 엔드포인트를 직접 호출, 관리자 전용 API를 URL 추측으로 접근, 서버가 대신 요청하는 기능(장소 검색, AI 예측 요청 등)에 악성 URL/내부 주소를 주입해 내부망을 탐색(SSRF).
-- **프로젝트에서 발생 가능한 상황**: CareTarget이 Guardian 전용 API를 직접 호출, 로그인한 보호자가 자신과 연동되지 않은 다른 보호대상자의 위치를 ID만 바꿔 조회, `/internal/**` 엔드포인트가 외부에 그대로 노출되는 경우, Google Places API 프록시 기능에 임의 URL을 주입해 Spring Boot가 내부망(Redis, PostgreSQL, FastAPI 등)으로 요청을 보내도록 유도하는 경우.
+- **프로젝트에서 발생 가능한 상황**: CareTarget이 Guardian 전용 API를 직접 호출, 로그인한 보호자가 자신과 연동되지 않은 다른 보호대상자의 위치를 ID만 바꿔 조회, `/internal/**` 엔드포인트가 외부에 그대로 노출되는 경우, Google Places API 프록시 기능에 임의 URL을 주입해 Spring Boot가 내부망(Redis, PostgreSQL, FastAPI 등)으로 요청을 보내도록 유도하는 경우. WebSocket에서는 동일한 문제가 다른 형태로 나타난다 — 연결(CONNECT) 시점에만 인증을 확인하고 이후 채널 구독(SUBSCRIBE) 시점에는 별도 검증이 없으면, 로그인한 보호자가 `/topic/location/{id}`의 id만 바꿔 구독해 자신과 무관한 CareTarget의 위치를 실시간으로 수신할 수 있다. REST의 IDOR과 달리 한 번 뚫리면 요청 단위가 아니라 연결이 유지되는 동안 데이터가 계속 유출된다는 차이가 있다.
 
 ### 1.2 프로젝트 위험 요소 분석
 
@@ -63,6 +66,7 @@ OWASP Top 10은 2026년 1월 `2025` 버전으로 개정되었다. 기존 2021 �
 | 관리자 API 접근 | `ROLE_ADMIN` 검증이 URL 패턴 누락이나 오탈자로 뚫릴 경우 전체 사용자/서비스 관리 기능 노출 |
 | 내부 전용 API 노출 | `/internal/geofence/check`, `/internal/ai/predict` 등이 인증 없이 외부 인터넷에서 직접 호출 가능한 경우 |
 | SSRF (서버 대행 요청 오남용) | Google Maps/Places API 프록시, AI 서버 호출 URL 등에 사용자 입력이 검증 없이 반영되는 경우 |
+| WebSocket 구독 인가 누락 | `/topic/location/{careTargetId}` 같은 구조에서 SUBSCRIBE 시점에 소유권 검증이 없으면, 인증된 사용자라도 임의의 id 채널을 구독해 타인의 실시간 위치를 수신 가능(Security_Guide.md 7.5.2) |
 
 ### 1.3 대응 방안
 
@@ -80,6 +84,10 @@ OWASP Top 10은 2026년 1월 `2025` 버전으로 개정되었다. 기존 2021 �
 - Public API 최소화: 공개 API 목록을 별도 문서화하고 신규 API 추가 시 기본값이 "인증 필요"가 되도록 설계
 - SSRF 방어: 외부 URL을 서버가 대신 호출하는 기능(장소 검색 등)은 허용 도메인 화이트리스트(Google API 도메인만) 적용, 사용자 입력 URL을 그대로 `fetch`하지 않는다
 
+**WebSocket 기준**
+- 연결(CONNECT) 인증과 별개로 구독(SUBSCRIBE) 시점에 리소스 소유권을 재검증한다(REST의 3단계 인가 구조를 WebSocket에도 동일하게 적용, Security_Guide.md 7.5.2)
+- 가능하면 클라이언트가 대상 id를 지정하는 공용 Topic 구조 대신, 서버가 인증된 사용자 기준으로만 발행하는 개인화 큐(`convertAndSendToUser`)를 우선 사용해 "잘못된 id 구독"이라는 공격 자체가 구조적으로 성립하지 않게 만든다
+
 ### 1.4 개발 체크리스트
 
 □ 모든 민감 API 인증 적용
@@ -88,6 +96,7 @@ OWASP Top 10은 2026년 1월 `2025` 버전으로 개정되었다. 기존 2021 �
 □ 관리자 API 별도 보호 (`/api/admin/**` 접근 시 감사 로그 기록, Security_Guide.md 10.1 연계)
 □ `/internal/**` 외부 노출 차단 (Spring Security + 네트워크 레벨 이중 확인)
 □ 서버 대행 요청(SSRF 가능 지점)에 URL 화이트리스트 적용 여부
+□ WebSocket SUBSCRIBE 시점 리소스 소유권 검증 적용 여부 (Security_Guide.md 7.5.2)
 
 ---
 
@@ -209,7 +218,7 @@ OWASP Top 10은 2026년 1월 `2025` 버전으로 개정되었다. 기존 2021 �
 ### 4.3 대응 방안
 
 **Spring Security 기준 / PasswordEncoder**
-- 로컬 계정 도입 시 `BCryptPasswordEncoder`(work factor 10 이상) 사용, 평문/양방향 암호화 저장 금지 (본 프로젝트는 Google OAuth2 전용이므로 현재는 비밀번호 자체를 저장하지 않는 것이 원칙 — Security_Guide.md 9장 A02 참고)
+- 로컬 계정 도입 시 `BCryptPasswordEncoder`(work factor 10 이상) 사용, 평문/양방향 암호화 저장 금지 (본 프로젝트는 Google OAuth2 전용이므로 현재는 비밀번호 자체를 저장하지 않는 것이 원칙 — Security_Guide.md 9장 A04 참고)
 
 **JWT Secret Key 관리**
 - 환경 변수(`JWT_SECRET`) 또는 AWS Secrets Manager/Parameter Store(SecureString)로 관리, 최소 256bit 이상 (Security_Guide.md 5.1과 동일 정책)

@@ -1,44 +1,36 @@
-# CLAUDE.md (Backend — Spring Boot)
+# CLAUDE.md (apps/backend)
+>해당파일 경로 apps/backend/CLAUDE.md
 
-> 이 파일에는 Backend 서비스에서 항상 알아야 하는 요약 정보와, 상세 내용을 확인해야 할 docs/rules 참조 경로를 작성한다.
+## 이 앱은
+Spring Boot 기반 REST/WebSocket API 서버. 인증/인가, Guardian/CareTarget 비즈니스 로직, PostgreSQL/Redis 연동, FastAPI(ai-server) 호출을 담당한다.
 
-## Project overview
-- 역할: REST API, WebSocket(실시간 위치), 인증/인가, GeoFence 판정, 알림 발송, AI 서버 연동
-- 현재 단계: API 설계 착수 전 — Security_Guide.md, API_Response_Rule.md 골격 우선 확정 필요
-  (Root CLAUDE.md 및 아래 Conventions 참조)
-- 전체 프로젝트 맥락은 Root `CLAUDE.md` 참조
+## 지침 문서 (상세 설계 — 코드 작성 전 반드시 확인)
 
-## Directory map
-- (실제 패키지 구조 미확정) [추가 필요]
-  예: `com.tracecare.{auth,location,geofence,notification,chat}` 도메인별 분리 제안 — 확정되면 갱신
-
-## Commands
-
-| 구분 | 명령어 |
+| 주제 | 문서 |
 |---|---|
-| 빌드 | TBD (Gradle/Maven 확인 필요) |
-| 실행 | TBD |
-| 테스트 | TBD |
+| 코딩 스타일, 패키지 구조, 네이밍 | `docs/backend/Coding_Convention.md` |
+| API 응답 포맷, Error Code | `docs/api/API_Response_Rule.md`, `.claude/rules/api.md` |
+| 전체 엔드포인트 목록 | `docs/api/API_Specification.md` |
+| 예외 처리 구조 | `docs/backend/Exception_Handling_Rule.md`, `.claude/rules/exception.md` |
+| 로깅 | `docs/backend/Logging_Guide.md`, `.claude/rules/logging.md` |
+| Redis 캐시 전략 | `docs/backend/Cache_Strategy_Guide.md`, `.claude/rules/cache.md` |
+| 인증/인가, JWT, OAuth2 | `docs/security/Security_Guide.md`, `.claude/rules/security.md` |
+| DB 테이블/쿼리 | `docs/db/DATABASE_DESIGN_GUIDE.md`, `.claude/rules/database.md` |
 
-## Conventions
-- 인증/인가 상세: `../../docs/security/Security_Guide.md` [예정] 담당
-  (OAuth2(Google) 인증 → 자체 JWT Access/Refresh 발급, Guardian/CareTarget Role 기반 권한)
-- API 응답 형식: `../../docs/api/API_Response_Rule.md` [예정] 담당
-- 예외 처리 구조: `../../docs/backend/Exception_Handling_Rule.md` [예정] 담당
-- DB 스키마·인덱스·트랜잭션·캐시 전략: `../../docs/db/DATABASE_DESIGN_GUIDE.md` 담당 (완료됨,
-  아래는 그중 API 설계 시 반드시 지켜야 할 핵심만 요약 발췌)
-  - 위치 저장(LocationHistory INSERT)과 GeoFence 판정/알림 발송은 같은 트랜잭션으로 묶지 않는다
-  - 기본 격리 수준 `READ COMMITTED`, `SERIALIZABLE` 원칙적으로 미사용
-  - 여러 테이블 갱신 시 `User → GuardianTarget → Place` 순서 고정 (Deadlock 방지)
-  - 캐시 키: `location:latest:{userId}`, `place:list:{guardianId}`,
-    `prediction:{userId}:{date}`, `chat:cache:{questionHash}`
-- SQL Injection 방어: MyBatis `#{}` 바인딩만 사용(`${}` 금지), JPQL 파라미터 바인딩 필수
-- 삭제는 Repository 표준 메서드만 사용, Native Query 우회 삭제 금지
+이 파일에서 위 내용을 재설명하지 않는다. 충돌 시 위 문서가 원본이다.
 
-## Quirks
-- Hugging Face AI 예측 서버가 유휴 시 sleep 상태가 될 수 있어, 예측 요청 전 Redis 캐시를
-  먼저 조회하고 없을 때만 AI 서버를 호출한다 — 단순 성능 캐시가 아니라 외부 서버 가용성 대응 목적.
-- `NotificationHistory.status`는 `EMERGENCY`/`GEOFENCE_EXIT` 알림의 경우 FCM 발송 실패 시에도
-  감사 목적상 행이 반드시 남아야 한다 — 실패를 삼키지 말고 `status='FAILED'`로 명시 기록.
-- FK 대상 컬럼(특히 `LocationHistory.user_id`)에는 반드시 별도 인덱스가 있다
-  (`../../docs/db/DATABASE_DESIGN_GUIDE.md` §5 기준, 이미 반영됨 — 재설계 시 누락 여부만 확인)
+## 패키지 루트
+`com.tracecare.backend` (Coding_Convention.md §1 참고)
+
+## 실행
+
+```
+docker compose up -d          # 프로젝트 루트에서, PostgreSQL/Redis 기동
+./gradlew bootRun             # apps/backend에서
+```
+
+## 코드 작성 시 최우선 확인 순서
+1. 이 API가 `API_Specification.md`에 이미 정의돼 있는가 (없으면 먼저 그 문서에 추가)
+2. Response/Error Code가 `API_Response_Rule.md` 체계(`{도메인}_{3자리}`)를 따르는가
+3. 예외를 던질 때 `Exception_Handling_Rule.md`의 계층(Business/Auth/External/Database)에 맞는 Custom Exception을 쓰는가
+4. 리소스 소유권 검증이 Service 계층에 명시적으로 있는가 (Security_Guide.md §4.5)

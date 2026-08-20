@@ -1,26 +1,30 @@
-# CLAUDE.md (Frontend — Flutter)
+# CLAUDE.md (apps/frontend)
+>해당파일 경로 apps/frontend/CLAUDE.md
 
-> 이 파일에는 Frontend 서비스에서 항상 알아야 하는 요약 정보와, 상세 내용을 확인해야 할 docs/rules 참조 경로를 작성한다.
+## 이 앱은
+Flutter 기반 모바일 앱. Guardian(보호자)과 CareTarget(보호대상자)이 Role에 따라 다른 화면을 쓰는 단일 앱이다.
 
-## Project overview
-- 역할: Guardian(보호자)/CareTarget(보호대상자) 앱, 실시간 지도 표시, WebSocket 기반 위치 갱신
-- 전체 프로젝트 맥락은 Root `CLAUDE.md` 참조
+## 지침 문서
 
-## Directory map
-- (실제 구조 미확정) [추가 필요] — Guardian용/CareTarget용 화면 분리 여부, 상태관리 패턴 확정 후 작성
-
-## Commands
-
-| 구분 | 명령어 |
+| 주제 | 문서 |
 |---|---|
-| 실행 | TBD (`flutter run` 추정) |
-| 빌드 | TBD |
-| 테스트 | TBD |
+| 코딩 스타일, 프로젝트 구조, 상태관리 | `docs/frontend/Coding_Convention.md` (일반 추천안, 확정 아님) |
+| API 요청/응답 파싱, 에러 처리, Token 재발급 흐름 | `docs/api/API_Response_Rule.md` 7장 (이미 확정 — 재구현하지 말고 그대로 따를 것) |
+| 전체 엔드포인트 목록 | `docs/api/API_Specification.md` |
+| Token 저장 위치(Secure Storage) | `docs/security/Security_Guide.md` §3.1 |
+| Role 변경 불가 정책 | `docs/api/API_Specification.md` §2.2 (`USER_004`) |
 
-## Conventions
-- Backend API 연동 시 공통 응답 형식은 `../../docs/api/API_Response_Rule.md` [예정]을 따른다
-  (Frontend에서 재정의하지 않음)
-- 지도: Google Maps SDK, 실시간 위치는 WebSocket으로 수신
+이 파일에서 위 내용을 재설명하지 않는다. 충돌 시 위 문서가 원본이다.
 
-## Quirks
-- (아직 특이사항 없음, 개발 진행하며 추가)
+## 실행
+
+```
+flutter pub get
+flutter run
+```
+
+## 코드 작성 시 최우선 확인 순서
+1. 새 API 연동이 공통 `ApiResponse.fromJson` / `ApiErrorInterceptor`를 거치는가 (개별 파서 작성 금지, API_Response_Rule.md §7.1/§7.3)
+2. 호출하려는 API가 `API_Specification.md`에 정의된 URI/권한과 일치하는가
+3. Access/Refresh Token을 `SharedPreferences`가 아니라 `flutter_secure_storage`에 저장하는가
+4. Role 선택 화면을 최초 온보딩 이후에 다시 노출하지 않는가 (Role은 최초 1회만 선택 가능)

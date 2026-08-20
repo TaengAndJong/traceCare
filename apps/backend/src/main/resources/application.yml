@@ -1,0 +1,38 @@
+spring:
+  application:
+    name: tracecare-backend
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:local}
+  datasource:
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+      naming:
+        # docs/db/tracecare_schema_ddl_1.0.sql가 모든 테이블/컬럼을 대소문자 혼용 인용 식별자("User" 등)로
+        # 정의하므로, Spring Boot 기본 물리 네이밍 전략(자동 snake_case 소문자 변환)을 끄고 Entity에 적은
+        # 이름을 그대로 사용한다. globally_quoted_identifiers와 함께 적용해야 케이스가 보존된 채로 인용된다.
+        physical-strategy: org.hibernate.boot.model.naming.PhysicalNamingStrategyStandardImpl
+    open-in-view: false
+    properties:
+      hibernate:
+        globally_quoted_identifiers: true
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+
+jwt:
+  secret: ${JWT_SECRET}
+  access-token-expiration: ${JWT_ACCESS_TOKEN_EXPIRATION:1800000}
+  refresh-token-expiration: ${JWT_REFRESH_TOKEN_EXPIRATION:1209600000}
+
+google:
+  client-id: ${GOOGLE_CLIENT_ID}
+
+server:
+  port: ${SERVER_PORT:8080}

@@ -1,4 +1,5 @@
 # TraceCare 프로젝트 — 최종 데이터베이스 설계 문서
+>해당파일 경로 docs/db/DATABASE_DESIGN_GUIDE.md
 
 - **프로젝트**: 아이·노인 케어 위치추적 알림 시스템 (GIS)
 - **대상 DBMS**: PostgreSQL (+ pgvector), 캐시: Redis
@@ -182,6 +183,7 @@ AI 예측(Feature Engineering)의 입력 데이터로 사용된다. place_name�
 | 컬럼 | 타입 | NULL | 기본값 | 설명 |
 |---|---|---|---|---|
 | id | BIGINT (IDENTITY) | NOT NULL | — | PK |
+| public_id | UUID | NOT NULL | gen_random_uuid() | 외부 노출용 식별자 (URL/API 응답) — §8 결정 반영, IDOR 방지 |
 | user_id | BIGINT | NOT NULL | — | User(보호자, 등록 시점 기준 ACTIVE PRIMARY Guardian) 참조 |
 | name | VARCHAR(150) | NOT NULL | — | 장소명 |
 | address | TEXT | NULL | — | 주소 |
@@ -356,6 +358,7 @@ GuardianTarget 카디널리티 및 Place 등록 권한 범위는 이전 [결정 
 | Place | CHECK | latitude BETWEEN -90 AND 90 | — |
 | Place | CHECK | longitude BETWEEN -180 AND 180 | — |
 | Place | CHECK | radius > 0 | — |
+| Place | UNIQUE | public_id | — (User와 동일 패턴, §8 결정 반영) |
 | Place | 문서화 (DB 제약 아님) | 등록(INSERT)·수정(UPDATE)·삭제(DELETE)는 요청자가 해당 CareTarget의 ACTIVE PRIMARY Guardian인 경우에만 허용 | Guardian의 role은 GuardianTarget 테이블 값이므로 Place 테이블 자체 CHECK로 표현 불가한 교차 테이블 규칙 → Service 계층 책임 (Exception Handling Rule 7장 Business Exception) |
 | Place | 문서화 (DB 제약 아님, 최종 확정) | CareTarget 1인당 Place 등록 수 상한 | 하드 상한 없음, 애플리케이션 소프트 상한 15개 적용 (설정값으로 관리). 가이드의 평균 추정치(3~5개)의 약 3배 여유. GuardianTarget 정원 처리와 동일 원칙 (DB 제약 대신 애플리케이션 카운트 검증) 적용 |
 | LocationHistory | CHECK | latitude/longitude 범위 | — |
@@ -402,7 +405,7 @@ GuardianTarget 카디널리티 및 Place 등록 권한 범위는 이전 [결정 
 |---|---|
 | 내부 PK | 전 테이블 `BIGINT GENERATED ALWAYS AS IDENTITY` (SERIAL 대신 SQL 표준 방식 채택 — 시퀀스 권한 관리가 더 안전) |
 | 근거 | 단일 Primary 쓰기 노드 구조이므로 다중 노드 분산 채번 문제가 없음. Auto Increment가 UUID 대비 인덱스 삽입 성능(B-Tree 오른쪽 끝 삽입)에서 유리 |
-| 외부 노출 식별자 | User에 한해 `public_id UUID DEFAULT gen_random_uuid()` 병행 — API/URL 경로 노출 시 순차 ID 추측(IDOR) 방지 |
+| 외부 노출 식별자 | User·Place에 한해 `public_id UUID DEFAULT gen_random_uuid()` 병행 — API/URL 경로 노출 시 순차 ID 추측(IDOR) 방지. GuardianTarget은 별도 컬럼을 두지 않는다 — 이 관계는 (guardian_id, target_id)가 ACTIVE 상태에서 유일하도록 이미 Partial UNIQUE(§7)로 강제되어 있어, 대상 User의 `public_id`만으로 관계를 충분히 식별할 수 있기 때문이다. API 응답의 `careTargetId`는 GuardianTarget.id가 아니라 **대상 User의 public_id**를 사용한다(2026-08 결정, 근거는 §13 참고) |
 | 확장 여부 | 향후 멀티 리전/멀티 쓰기 노드로 확장하는 시점에 ULID/Snowflake 등 분산 채번으로 전환 검토 — 현재 단계에서 선제 도입은 불필요한 복잡도(YAGNI)이므로 보류 |
 | INT → BIGINT 전환 이유 | INT(SERIAL)는 약 21억까지만 표현 가능. LocationHistory처럼 연간 수백억 건이 쌓이는 테이블은 수년 내 고갈 가능 → 전 테이블 표준을 BIGINT로 통일 |
 
@@ -599,6 +602,8 @@ VECTOR(n)의 차원과 Gemini 무료 사용량 한도는 직접적 관계가 없
 | Guardian당 CareTarget 수, CareTarget당 Place 수는 DB 제약 없이 애플리케이션 소프트 상한만 적용 | 카운트 기반 규칙(동일 guardian_id/user_id의 행 개수)은 PostgreSQL 선언적 제약으로 표현 불가하다는 점에서 GuardianTarget 정원(3명) 처리와 동일한 제약. 정확한 숫자는 문서 근거가 없어 확정하지 않고 정책값으로 남김 |
 | PRIMARY 탈퇴 시 하이브리드 승계 정책 채택 | 완전 자동 승계는 가족 관계의 민감성상 원치 않는 권한 이전 리스크가 있고, 완전 수동 위임 강제는 연락 두절 등 위급 상황에서 "대표 없는 CareTarget"이 무기한 방치될 리스크가 있어, 안전 서비스 본질에 맞게 두 리스크를 절충 |
 | VisitHistory.place_id에 idx_vh_place(Partial) 인덱스 보완 | DDL 작성 단계에서 place_id가 §5에 FK 대상 컬럼으로 명시되어 있음에도 §9 인덱스 목록에서 누락되어 있었음을 발견. §9 공통 원칙("모든 FK 대상 컬럼에 명시적 인덱스 필요")을 그대로 적용한 것이므로 새로운 설계 판단이 아니라 문서 내부 일관성 보완. place_id가 nullable(미등록 장소 방문 시 NULL)이므로 WHERE place_id IS NOT NULL Partial Index로 만들어 이미 문서 전반에 적용된 패턴(idx_place_user, idx_vh_registered와 동일한 "불필요한 값 제외" 원칙)과 통일, 인덱스 크기도 최소화 |
+| Place에 public_id(UUID) 컬럼 추가 | §8 "외부 노출 식별자는 IDOR 방지 목적으로 public_id 병행"이라는 원칙이 애초에 User에만 적용되고 Place에는 누락돼 있었음을 API_Response_Rule.md 교차 검토 과정에서 발견. Place는 GuardianTarget과 달리 User로 대체 식별이 불가능(한 Guardian이 여러 Place를 등록하므로 User.public_id 하나로는 특정 Place를 가리킬 수 없음)하므로, User와 동일한 패턴으로 컬럼을 추가하는 것이 원래 원칙에 맞다. SQL DDL이 아직 작성 전 단계라 마이그레이션 비용 없이 반영 가능 |
+| GuardianTarget에는 public_id를 추가하지 않음 | Place와 달리 GuardianTarget은 (guardian_id, target_id)가 ACTIVE 상태에서 Partial UNIQUE로 유일성이 이미 보장되므로, 대상 User의 public_id만으로 관계를 충분히 식별할 수 있다. 컬럼을 추가해도 얻는 보안 이점이 없이 복잡도만 늘어나므로(YAGNI), API의 careTargetId는 GuardianTarget.id 대신 대상 User의 public_id를 사용하는 것으로 정리 |
 
 ---
 

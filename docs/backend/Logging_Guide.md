@@ -1,4 +1,5 @@
 # Logging Guide
+>해당파일 경로 docs/backend/Logging_Guide.md
 
 프로젝트: 아이·노인 케어 위치추적 알림 시스템 (GIS)
 문서 위치: `docs/backend/Logging_Guide.md`
@@ -125,7 +126,7 @@ private static final Logger log = LoggerFactory.getLogger(CareTargetService.clas
 
 | 항목 | 정책 |
 |---|---|
-| DEBUG 활성화 | `logging.level.com.gis.backend=DEBUG` — 요청 파라미터, 중간 처리 값 등 상세 흐름 확인 가능 |
+| DEBUG 활성화 | `logging.level.com.tracecare.backend=DEBUG` — 요청 파라미터, 중간 처리 값 등 상세 흐름 확인 가능 |
 | 상세 요청 흐름 확인 | Controller 진입/Service 호출/Repository Query까지 전 구간 로그 출력 |
 | SQL 로그 | `spring.jpa.show-sql=true`, MyBatis Mapper 로그 활성화 허용(개발 편의 목적) |
 | 민감정보 예외 | 개발 환경이라도 실제 사용자 데이터(운영 DB 복제본 등)를 다루는 경우 7장 마스킹 규칙을 동일하게 적용한다 — "개발 환경이니 괜찮다"는 예외를 두지 않는다 |
@@ -193,7 +194,7 @@ log.info("event=API_REQUEST_END, userId={}, uri={}, status={}, elapsedMs={}", us
 
 **주의사항**
 
-- SQL 전체 로그(바인딩 파라미터 포함)는 운영 환경에서 출력하지 않는다. SQL 원문 노출은 정부 보안가이드의 "오류 메시지를 통한 정보노출" 및 OWASP A02:2025(Security Misconfiguration) 대응 원칙과 충돌한다(OWASP_Security_Guide.md 2장 참고).
+- SQL 전체 로그(바인딩 파라미터 포함)는 운영 환경에서 출력하지 않는다. SQL 원문 노출은 정부 보안가이드의 "오류 메시지를 통한 정보노출" 및 OWASP **A02:2025(Security Misconfiguration)** 대응 원칙과 충돌한다(OWASP_Security_Guide.md 참고).
 - 개발 환경에서는 `spring.jpa.show-sql=true` 또는 MyBatis 로그로 SQL을 확인할 수 있으나, 운영 환경에서는 Query 식별자(Mapper ID, Repository 메서드명)와 소요 시간만 남긴다.
 - 단순 단건 조회(`findById` 등 반복 호출되는 경량 조회)까지 매번 로그를 남기지 않는다. "중요 Query"는 대량 조회, 쓰기 작업, 도메인상 의미 있는 조회(관계 검증 조회 등)로 한정한다.
 
@@ -222,7 +223,8 @@ Spring Security 기반 인증/인가 이벤트는 Security_Guide.md에서 정의
 | `ACCESS_DENIED` | Role 불일치로 403 발생(Security_Guide.md 2.6) | WARN |
 | `RESOURCE_ACCESS_DENIED` | 리소스 소유권 불일치로 403 발생(Service 계층, Security_Guide.md 4.5) | WARN |
 | `ADMIN_API_ACCESS` | `/api/admin/**` 호출(성공 여부 무관, 전건 기록) | INFO (12장 Audit Log와 연계, 별도 채널 병행 기록) |
-| `PROTECTED_DATA_ACCESS_DENIED` | 위치/장소 등 보호 데이터 접근 실패 | WARN |
+
+> 위치/장소 등 보호 데이터에 대한 리소스 소유권 불일치도 별도 이벤트명을 쓰지 않고 `RESOURCE_ACCESS_DENIED`로 통합한다. 어떤 도메인에서 발생했는지는 함께 기록되는 `errorCode`(`TARGET_002`/`LOCATION_003`/`LOCATION_004`/`ARRIVAL_001`/`EMERGENCY_001` 등)로 구분하며, 이벤트명을 도메인별로 새로 만들지 않는다 — 동일한 실패 유형(3단계 리소스 소유권 불일치)에 이벤트명이 여러 개 생기면 어떤 걸 써야 할지 매번 헷갈리기 때문이다.
 
 ### 5.3 예시
 
@@ -342,7 +344,7 @@ log.error("event=SYSTEM_EXCEPTION, code={}", errorCode, e); // e를 마지막 �
 |---|---|
 | Validation Exception | WARN, 실패한 필드 목록 기록(요청 바디 전체는 미기록) |
 | Business Exception | WARN, ErrorCode + 관련 식별자 |
-| Authentication/Authorization Exception (Service 계층에서 발생하는 것) | WARN, `event=ACCESS_DENIED` 등 5장 이벤트명 사용 |
+| Authentication/Authorization Exception (Service 계층에서 발생하는 것) | WARN, `event=RESOURCE_ACCESS_DENIED`(5.2절) 사용 — `ACCESS_DENIED`는 Role 불일치(2단계, Filter의 `AccessDeniedHandler`)에서 쓰는 이벤트명이라 GlobalExceptionHandler 로그 대상이 아니다(Exception Handling Rule §8.1 확정 구조 참고) |
 | External Service Exception | ERROR, 대상 서비스명(`targetService`) 포함 |
 | Database Exception | ERROR |
 | 미분류 Exception | ERROR, 전체 Stack Trace |
@@ -350,7 +352,7 @@ log.error("event=SYSTEM_EXCEPTION, code={}", errorCode, e); // e를 마지막 �
 ### 9.3 Error Response 관리와 로그의 흐름
 
 ```
-Client Response  ← ApiResponse.fail(ErrorCode)  (API Response Rule 포맷)
+Client Response  ← ApiResponse.error(ErrorCode)  (API Response Rule 포맷)
       ↑
   Error Code 결정 (Exception Handling Rule 3.3 우선순위 매칭)
       ↑
@@ -531,7 +533,7 @@ FastAPI
 
 ## 15. Log Monitoring 운영 기준
 
-운영자가 정기적으로(또는 알림을 통해) 확인해야 하는 로그 패턴이다. OWASP_Security_Guide.md 9장(A09:2025 Security Logging & Alerting Failures)의 "로그가 있어도 알림이 없으면 무의미하다"는 원칙을 반영한다.
+운영자가 정기적으로(또는 알림을 통해) 확인해야 하는 로그 패턴이다. OWASP_Security_Guide.md 9장(**A09:2025** Security Logging and Alerting Failures)의 "로그가 있어도 알림이 없으면 무의미하다"는 원칙을 반영한다.
 
 | 모니터링 대상 | 기준 | 대응 |
 |---|---|---|

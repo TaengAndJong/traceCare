@@ -1,9 +1,10 @@
 # Security Guide
+>해당파일 경로 docs/security/Security_Guide.md
 
 프로젝트: 아이·노인 케어 위치추적 알림 시스템 (GIS)
-문서 위치: `docs/backend/Security_Guide.md`
+문서 위치: `docs/security/Security_Guide.md`
 담당 서버: Spring Boot Backend (인증/인가), FastAPI AI Server(연동 대상)
-기준: OWASP Top 10 (2021), Spring Security 공식 권장 아키텍처, JWT/OAuth2 표준
+기준: OWASP Top 10 (2025), Spring Security 공식 권장 아키텍처, JWT/OAuth2 표준
 버전: v1.0 (작성일 2026-08-06)
 
 > 이 문서는 **Authentication / Authorization 설계**를 담당한다.
@@ -162,8 +163,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     @Override
     protected void doFilterInternal(HttpServletRequest request,
-                                     HttpServletResponse response,
-                                     FilterChain filterChain) throws ServletException, IOException {
+                                    HttpServletResponse response,
+                                    FilterChain filterChain) throws ServletException, IOException {
         String token = resolveToken(request);
 
         if (StringUtils.hasText(token) && jwtTokenProvider.validateToken(token)) {
@@ -198,7 +199,7 @@ public class JwtAuthenticationEntryPoint implements AuthenticationEntryPoint {
 
     @Override
     public void commence(HttpServletRequest request, HttpServletResponse response,
-                          AuthenticationException authException) throws IOException {
+                         AuthenticationException authException) throws IOException {
         // 401 응답. 실제 JSON 바디 포맷/ErrorCode 값은 API Response Rule을 따른다.
         response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
@@ -217,7 +218,7 @@ public class JwtAccessDeniedHandler implements AccessDeniedHandler {
 
     @Override
     public void handle(HttpServletRequest request, HttpServletResponse response,
-                        AccessDeniedException accessDeniedException) throws IOException {
+                       AccessDeniedException accessDeniedException) throws IOException {
         response.setStatus(HttpServletResponse.SC_FORBIDDEN);
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.getWriter().write(securityResponseWriter.forbidden(request));
@@ -266,7 +267,7 @@ public class JwtAccessDeniedHandler implements AccessDeniedHandler {
 
 #### Token 만료 정책
 
-- Access Token 만료 시 `TOKEN_EXPIRED` 전용 상태로 응답한다(일반 `UNAUTHORIZED`와 구분, Exception Handling Rule 8.2 참고). Flutter는 이 상태를 받으면 자동으로 `/api/auth/refresh`를 호출한다.
+- Access Token 만료 시 `AUTH_002` 코드로 응답한다(일반 인증 필요 `AUTH_001`과 구분, API Response Rule §5.2·Exception Handling Rule 8.2 참고). Flutter는 이 코드를 받으면 자동으로 `/api/auth/refresh`를 호출한다.
 - Refresh Token도 만료되었거나 Redis에 존재하지 않으면(로그아웃/탈취 대응으로 무효화된 경우 포함) 재로그인을 요구한다.
 - Refresh Token은 1회 사용 후 재발급하는 **Rotation 전략**을 권장한다(재사용 감지 시 해당 사용자의 모든 세션을 강제 만료).
 
@@ -319,7 +320,7 @@ AuthenticationManager
 
 ```java
 http.authorizeHttpRequests(auth -> auth
-    .requestMatchers("/api/auth/**").permitAll()
+        .requestMatchers("/api/auth/**").permitAll()
     .requestMatchers("/internal/**").denyAll()          // 외부 노출 차단, Gateway/Network 레벨에서도 재차단(11장)
     .requestMatchers("/api/guardian/**").hasRole("GUARDIAN")
     .requestMatchers("/api/care-target/**").hasRole("CARE_TARGET")
@@ -483,7 +484,7 @@ Google 인증 성공 직후, Spring Boot는 자체 `sub`(내부 userId), `role`�
 | 상황 | 처리 |
 |---|---|
 | `oauth_provider` + `oauth_id`가 기존 회원과 일치 | 정상 로그인 처리 |
-| `oauth_id`는 새로우나 이메일이 기존 회원과 동일 | 자동 병합하지 않는다. 잠재적 계정 탈취 시나리오이므로, 별도 본인 확인 절차 없이는 기존 계정과 자동으로 연결하지 않고 신규 계정으로 처리하거나 명시적 연동 절차를 별도로 제공한다 |
+| `oauth_id`는 새로우나 이메일이 기존 회원과 동일 | 자동 병합하지 않는다. 잠재적 계정 탈취 시나리오이므로, 별도 본인 확인 절차 없이는 기존 계정과 자동으로 연결하지 않는다. **(현재 구현 기준)** `tracecare_schema_ddl_1.0.sql`의 `uq_user_email_active`(활성 사용자당 이메일 유일) 제약으로 인해 "신규 계정으로 처리"(동일 이메일 두 번째 계정 생성)는 DB 제약 위반이 되어 불가능하다 — 대신 `USER_002`(409, 이미 가입된 사용자)로 로그인을 거부한다. 별도 본인 확인을 거친 명시적 계정 연동 절차는 아직 구현하지 않았으며, 필요해지면 별도 기능으로 설계한다 |
 | 최초 로그인 | User 엔티티 생성. 이 시점에는 Guardian/CareTarget Role이 미정 상태일 수 있으며, 최초 온보딩 단계에서 Role을 선택/배정하는 후속 API를 별도로 둔다 |
 
 ---
@@ -513,19 +514,74 @@ Google 인증 성공 직후, Spring Boot는 자체 `sub`(내부 userId), `role`�
 ```java
 CorsConfiguration config = new CorsConfiguration();
 config.setAllowedOrigins(List.of("https://<프로덕션 관리자 웹 도메인>")); // 모바일 앱은 Origin 헤더 자체가 없는 경우가 많음
-config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH"));
-config.setAllowedHeaders(List.of("Authorization", "Content-Type"));
-config.setAllowCredentials(true);
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH"));
+        config.setAllowedHeaders(List.of("Authorization", "Content-Type"));
+        config.setAllowCredentials(true);
 ```
 
 - 허용 Origin은 명시적 도메인만 등록하고 `*`(전체 허용)는 사용하지 않는다. 특히 `allowCredentials(true)`와 `*`는 함께 사용할 수 없다(브라우저 정책상 무효).
 - Flutter 모바일 앱은 브라우저 CORS 정책의 적용을 받지 않으므로, CORS 설정은 주로 향후 추가될 수 있는 웹 관리자 콘솔을 대비한 것이다.
+
+> **TODO(미구현)**: 실제 프로덕션 관리자 웹 도메인 값이 확정되면 위 `CorsConfigurationSource` 예시대로 `common.security`에 CORS 설정을 구현한다. 현재 웹 관리자 콘솔이 없어 보류 중이다(Flutter 모바일 클라이언트는 CORS 대상이 아니므로 이 보류가 모바일 API 동작에는 영향 없음).
 
 ### 7.4 CSRF 정책
 
 - JWT 기반 Stateless 인증에서는 CSRF Protection을 **비활성화**한다(`http.csrf(csrf -> csrf.disable())`).
 - **비활성화 이유**: CSRF 공격은 브라우저가 쿠키를 요청에 자동으로 실어 보내는 특성을 악용한다. 이 프로젝트는 인증 정보를 쿠키가 아닌 `Authorization: Bearer` 헤더로 클라이언트(Flutter)가 명시적으로 담아 보내므로, 공격자가 피해자 브라우저를 통해 임의로 이 헤더를 실어 보낼 수 없다. 즉 CSRF 공격의 전제 조건 자체가 성립하지 않는다.
 - **Cookie 기반 인증과의 차이점**: 만약 향후 웹 관리자 콘솔에서 Refresh Token을 HttpOnly Cookie로 저장하는 방식을 도입한다면, 그 경로에 한해서는 CSRF Protection을 다시 활성화하거나 `SameSite=Strict/Lax` 쿠키 옵션과 CSRF Token 검증을 함께 적용해야 한다. 즉 "JWT를 헤더로 전달하는 API"와 "인증 정보를 쿠키로 전달하는 API"는 CSRF 위협 모델이 다르므로 동일한 정책을 적용하면 안 된다.
+
+### 7.5 WebSocket 연결/구독 보안
+
+REST API의 3단계 인가 구조(인증 → Role → 리소스 소유권, §4.5)를 WebSocket에도 동일하게 적용한다. WebSocket은 REST와 취약점의 성격이 다르므로 별도로 다룬다 — REST의 IDOR은 요청 1건이 뚫리는 것으로 끝나지만, WebSocket 구독(SUBSCRIBE)이 한 번 잘못 뚫리면 **연결이 유지되는 동안 데이터가 계속 유출**된다(OWASP_Security_Guide.md §1.1 A01:2025 참고).
+
+#### 7.5.1 CONNECT 단계: 인증
+
+- STOMP CONNECT 프레임의 헤더로 JWT를 전달받아 검증한다(`Authorization` 헤더와 동일한 Access Token 사용, 별도 WebSocket 전용 토큰 체계를 만들지 않는다).
+- CONNECT 시점 인증 실패는 REST의 401과 동일하게 연결 자체를 거부한다.
+
+```java
+@Override
+public Message<?> preSend(Message<?> message, MessageChannel channel) {
+    StompHeaderAccessor accessor = MessageHeaderAccessor.getAccessor(message, StompHeaderAccessor.class);
+    if (StompCommand.CONNECT.equals(accessor.getCommand())) {
+        String token = accessor.getFirstNativeHeader("Authorization");
+        Authentication auth = jwtTokenProvider.getAuthentication(token); // 검증 실패 시 예외
+        accessor.setUser(auth);
+    }
+    return message;
+}
+```
+
+#### 7.5.2 SUBSCRIBE 단계: 리소스 소유권 재검증 (핵심)
+
+**CONNECT 인증과 SUBSCRIBE 인가를 같은 것으로 취급하지 않는다.** "로그인은 했다"와 "이 Topic을 구독해도 된다"는 별개의 검증이다 — REST에서 인증(1단계)과 리소스 소유권(3단계)을 분리하는 것과 동일한 이유다.
+
+- `/topic/location/{careTargetId}` 처럼 클라이언트가 대상 id를 지정하는 공용 Topic 구조는 **가능하면 쓰지 않는다.** SUBSCRIBE 시점에 매번 소유권 검증을 빠뜨리지 않아야 하는 부담이 생기고, 검증 로직이 하나라도 누락되면 즉시 취약점이 된다.
+- 대신 서버가 인증된 사용자 기준으로만 발행하는 **개인화 큐**(`convertAndSendToUser(userId, "/queue/location", payload)`)를 우선 사용한다. 이 구조에서는 "잘못된 id를 구독"하는 공격 자체가 성립하지 않는다 — 애초에 클라이언트가 다른 사용자의 큐를 지정할 방법이 없기 때문이다.
+- 부득이하게 id 기반 공용 Topic을 써야 하는 경우, SUBSCRIBE 인터셉터에서 §4.5와 동일하게 Service 계층 조회(GuardianTarget 관계 확인)를 거쳐야 하며, 이 검증 없이 SUBSCRIBE를 허용하지 않는다.
+
+```java
+@Override
+public Message<?> preSend(Message<?> message, MessageChannel channel) {
+    StompHeaderAccessor accessor = MessageHeaderAccessor.getAccessor(message, StompHeaderAccessor.class);
+    if (StompCommand.SUBSCRIBE.equals(accessor.getCommand())) {
+        String destination = accessor.getDestination(); // 예: /topic/location/{careTargetId}
+        String careTargetId = extractCareTargetId(destination);
+        String guardianId = ((Authentication) accessor.getUser()).getName();
+        if (!careTargetAuthService.isOwner(guardianId, careTargetId)) { // §4.5와 동일한 소유권 조회
+            throw new AccessDeniedCustomException(ErrorCode.TARGET_002); // 3단계 인가 실패, Exception Handling Rule 8.1 3단계 처리
+        }
+    }
+    return message;
+}
+```
+
+#### 7.5.3 개발 체크리스트
+
+□ CONNECT 시점에 JWT 검증이 이루어지는가 (REST와 동일한 토큰 체계 사용)
+□ 공용 Topic(`/topic/location/{id}`) 대신 개인화 큐(`convertAndSendToUser`)를 우선 검토했는가
+□ 부득이하게 공용 Topic을 쓴다면 SUBSCRIBE 시점에 리소스 소유권 검증이 빠짐없이 적용되는가
+□ SUBSCRIBE 인가 실패가 REST의 3단계 인가 실패(403)와 동일한 원칙으로 처리되는가
 
 ---
 
@@ -537,7 +593,7 @@ config.setAllowCredentials(true);
 |---|---|
 | 로그인 필요 | 인증 헤더 자체가 없는 상태로 보호된 API 접근 |
 | JWT 없음 | `Authorization` 헤더 누락 |
-| JWT 만료 | Access Token `exp` 초과 (별도 `TOKEN_EXPIRED` 상태로 구분, 5.3·3.1 참고) |
+| JWT 만료 | Access Token `exp` 초과 (별도 `AUTH_002` 코드로 구분, 5.3·3.1 참고) |
 | JWT 변조 | 서명 검증 실패 |
 | Blacklist 등록된 토큰 | 로그아웃/강제 만료된 토큰 재사용 시도 |
 
@@ -563,7 +619,7 @@ config.setAllowCredentials(true);
 
 ## 9. OWASP Top 10 대응 정책
 
-### A01: Broken Access Control
+### A01:2025 Broken Access Control
 
 | 위험 | 대응 |
 |---|---|
@@ -571,24 +627,7 @@ config.setAllowCredentials(true);
 | Insecure Direct Object Reference (IDOR) | `/api/guardian/care-targets/{id}` 같은 경로 파라미터 접근 시 매번 "요청자-리소스 소유 관계"를 DB로 검증, id 값만으로 접근 허용하지 않음 |
 | 내부 전용 API 외부 노출 | `/internal/**`은 Spring Security에서 `denyAll` + Nginx/네트워크 레벨 접근 제한 이중 적용(11장) |
 
-### A02: Cryptographic Failures
-
-| 위험 | 대응 |
-|---|---|
-| 통신 구간 평문 노출 | 전 구간 HTTPS 강제(Nginx Reverse Proxy에서 TLS Termination, HTTP→HTTPS 리다이렉트) |
-| 민감 설정값 노출 | JWT Secret, Google Client Secret, LLM API Key 등은 환경 변수/Secret Manager로 관리(5.1) |
-| 비밀번호 저장 | 이 프로젝트는 Google OAuth2 전용 로그인이므로 자체 비밀번호를 저장하지 않는 것이 원칙. 향후 로컬 계정 방식을 추가할 경우 `BCryptPasswordEncoder`(work factor 10 이상)로 해시 저장, 평문/양방향 암호화 저장 금지 |
-| 저장 데이터 암호화 | 위치 이력 등 민감 데이터는 DB 접근 통제(권한 분리)와 함께, 필요 시 컬럼 단위 암호화 적용을 검토 |
-
-### A03: Injection
-
-| 위험 | 대응 |
-|---|---|
-| SQL Injection | JPA Parameter Binding 기본 사용, MyBatis `#{}` 바인딩만 허용(7.1) |
-| 입력값 미검증으로 인한 오동작 | DTO Validation(`@Valid`)으로 형식·범위 사전 차단(7.1, Validation 상세 흐름은 Exception Handling Rule 참고) |
-| LLM Prompt Injection | AI Care Chat에 전달되는 사용자 입력을 Prompt에 그대로 삽입하지 않고, 시스템 프롬프트와 사용자 입력 영역을 명확히 분리, 길이 제한 적용(11장) |
-
-### A05: Security Misconfiguration
+### A02:2025 Security Misconfiguration
 
 | 위험 | 대응 |
 |---|---|
@@ -597,7 +636,24 @@ config.setAllowCredentials(true);
 | 불필요한 정보 노출 | 에러 응답에 스택 트레이스 미포함(Exception Handling Rule 12장과 연계) |
 | CORS 과다 허용 | `*` Origin 금지(7.3) |
 
-### A07: Identification and Authentication Failures
+### A04:2025 Cryptographic Failures
+
+| 위험 | 대응 |
+|---|---|
+| 통신 구간 평문 노출 | 전 구간 HTTPS 강제(Nginx Reverse Proxy에서 TLS Termination, HTTP→HTTPS 리다이렉트) |
+| 민감 설정값 노출 | JWT Secret, Google Client Secret, LLM API Key 등은 환경 변수/Secret Manager로 관리(5.1) |
+| 비밀번호 저장 | 이 프로젝트는 Google OAuth2 전용 로그인이므로 자체 비밀번호를 저장하지 않는 것이 원칙. 향후 로컬 계정 방식을 추가할 경우 `BCryptPasswordEncoder`(work factor 10 이상)로 해시 저장, 평문/양방향 암호화 저장 금지 |
+| 저장 데이터 암호화 | 위치 이력 등 민감 데이터는 DB 접근 통제(권한 분리)와 함께, 필요 시 컬럼 단위 암호화 적용을 검토 |
+
+### A05:2025 Injection
+
+| 위험 | 대응 |
+|---|---|
+| SQL Injection | JPA Parameter Binding 기본 사용, MyBatis `#{}` 바인딩만 허용(7.1) |
+| 입력값 미검증으로 인한 오동작 | DTO Validation(`@Valid`)으로 형식·범위 사전 차단(7.1, Validation 상세 흐름은 Exception Handling Rule 참고) |
+| LLM Prompt Injection | AI Care Chat에 전달되는 사용자 입력을 Prompt에 그대로 삽입하지 않고, 시스템 프롬프트와 사용자 입력 영역을 명확히 분리, 길이 제한 적용(11장) |
+
+### A07:2025 Authentication Failures
 
 | 위험 | 대응 |
 |---|---|
@@ -605,14 +661,16 @@ config.setAllowCredentials(true);
 | 계정 탈취 | OAuth2 이메일 검증(6.6), oauth_id 기반 매핑(6.6~6.7) |
 | 무차별 대입(향후 로컬 계정 도입 시) | 로그인 시도 횟수 제한, CAPTCHA 등 도입 검토 |
 
-### A09: Security Logging and Monitoring Failures
+### A09:2025 Security Logging and Alerting Failures
 
 | 위험 | 대응 |
 |---|---|
 | 보안 이벤트 미기록 | 로그인 성공/실패, JWT 검증 실패, 권한 접근 실패, 관리자(Admin) 접근을 별도 기록(10장) |
 | 로그를 통한 개인정보 유출 | 위치 좌표 원문, 토큰 원문, 얼굴 인증 데이터는 로그에서 마스킹/제외(10장) |
 
-> 본 프로젝트에서 우선순위가 높은 A01/A02/A03/A05/A07/A09를 위 표로 정리했으며, A04(Insecure Design), A06(Vulnerable Components), A08(Software and Data Integrity Failures), A10(SSRF)은 아키텍처/의존성 관리 영역으로 Architecture 문서 및 운영 체크리스트에서 별도로 관리한다(본 문서에서 중복 작성하지 않음).
+> 본 프로젝트에서 우선순위가 높은 A01/A02/A04/A05/A07/A09(2025 기준)를 위 표로 정리했다. 나머지 카테고리는 아키텍처/의존성 관리 영역이거나 이번 개정(2025)에서 신설된 항목이라 별도 검토가 필요하다(본 문서에서 중복 작성하지 않음).
+> - A03:2025 Software Supply Chain Failures(신규), A06:2025 Insecure Design, A08:2025 Software or Data Integrity Failures: Architecture 문서 및 운영 체크리스트에서 별도 관리
+> - **A10:2025 Mishandling of Exceptional Conditions(신규)**: 이번 개정에서 새로 생긴 카테고리로, 내용상 `Exception Handling Rule` 문서가 이미 다루는 영역(예외 삼킴, 부적절한 Fallback, 미분류 예외)과 직접 겹친다. Exception Handling Rule 쪽에서 이 카테고리 대응表를 추가하는 걸 검토할 필요가 있다 — 이 문서에서 임의로 추가하지 않는다(문서 책임 경계, Exception Handling Rule 담당)
 
 ---
 
@@ -670,7 +728,7 @@ API Key 유출 시의 재사용 공격(Replay Attack)까지 방어하려면, 요
 
 - Spring Boot는 FastAPI로 전달하기 전에 요청 데이터(CareTarget ID, 좌표 범위, 채팅 메시지 길이 등)를 1차 검증한다(7.1 기준과 동일).
 - FastAPI 측에서도 Spring Boot로부터 온 요청이라는 이유로 무조건 신뢰하지 않고, 자체적으로 입력 스키마(Pydantic 모델) 검증을 수행한다(신뢰 경계 안이라도 방어적 코딩 원칙 적용).
-- LLM API에 전달되는 사용자 발화는 시스템 프롬프트와 명확히 분리하고, 길이 제한 및 금칙어 필터링을 적용해 Prompt Injection으로 인한 시스템 프롬프트 노출·오작동을 방지한다(9장 A03 참고).
+- LLM API에 전달되는 사용자 발화는 시스템 프롬프트와 명확히 분리하고, 길이 제한 및 금칙어 필터링을 적용해 Prompt Injection으로 인한 시스템 프롬프트 노출·오작동을 방지한다(9장 A05 참고).
 
 ---
 

@@ -1,11 +1,17 @@
 # API Response Standard
-
+>해당파일 경로 docs/api/API_Response_Rule.md
 > 이 문서는 Backend-Frontend 간 API 응답 규격을 왜 이렇게 설계했는지, 구조·대안·트레이드오프까지 상세히 작성한다.
 
 **프로젝트**: 아이·노인 케어 위치추적 알림 시스템 (GIS 기반 케어 서비스)
 **대상 독자**: Backend(Spring Boot) 개발자, Frontend(Flutter) 개발자
 **목적**: Backend와 Frontend 간 API 요청/응답 규격을 통일하여 개발 생산성과 유지보수성을 확보한다.
 **적용 범위**: `/api/**` (Guardian API, CareTarget API, Auth API). `/internal/**` 내부 API는 서버 간 통신이므로 본 문서의 클라이언트 처리 규칙(4절, 7절)은 적용 대상이 아니다.
+
+**관련 문서** (이 문서는 각 영역을 요약만 하며, 상세는 아래 문서가 원본이다)
+- 인증/인가/식별자 노출(IDOR) 상세 정책 → `docs/security/Security_Guide.md`
+- OWASP Top 10 점검 기준 → `docs/security/OWASP_Security_Guide.md`
+- 예외 계층 설계·`GlobalExceptionHandler` 구현 상세 → Exception Handling Rule 문서
+- 테이블/식별자(`public_id`) 설계 근거 → `docs/db/DATABASE_DESIGN_GUIDE.md`
 
 ---
 
@@ -58,6 +64,19 @@
 - 삭제 API는 `data: null` + `success: true`로 응답한다 (별도 반환할 데이터가 없음).
 - 날짜/시간은 항상 **ISO-8601 UTC(`yyyy-MM-dd'T'HH:mm:ss'Z'`)** 로 통일하고, 화면 표시용 로컬 시간 변환은 Flutter에서 수행한다. 위치 좌표(위도/경도)는 `Double` 타입, 소수점 6자리 이상을 유지한다.
 
+### 1.5 식별자 노출 정책 (public_id)
+
+`DATABASE_DESIGN_GUIDE.md`(4.2/4.3절 개선안)는 순차 정수 PK를 API 응답/URL에 그대로 노출하면 ID를 1씩 증가시켜 순회하는 방식의 IDOR 시도가 쉬워진다는 이유로 `public_id`(UUID) 병행을 규정한다. 이 Response 문서도 동일 기준을 따른다.
+
+| 리소스 성격 | 대상 예시 | `data`에 노출하는 식별자 |
+|---|---|---|
+| Master Data (저빈도 변경, 사용자가 직접 조작) | User(Guardian/CareTarget), Place | `public_id`(UUID 문자열). 내부 `id`(BIGINT/SERIAL)는 절대 응답에 포함하지 않는다 |
+| Time-Series Data (대용량 이력, 조회 전용) | LocationHistory, VisitHistory, NotificationHistory, PredictionHistory, ChatHistory | 기존 내부 PK(BIGINT) 그대로 사용 가능. 소유권 검증은 Service 계층에서 별도 수행하므로(4.1절) ID 추측 자체의 위험도가 Master Data보다 낮음 |
+
+> **GuardianTarget 예외**: GuardianTarget은 자체 `public_id` 컬럼을 두지 않는다. (guardian_id, target_id)가 ACTIVE 상태에서 유일하도록 이미 DB 제약(Partial UNIQUE)으로 강제되어 있어, 대상 User의 `public_id`만으로 관계를 충분히 식별할 수 있기 때문이다(근거: `DATABASE_DESIGN_GUIDE.md` §8/§13). 따라서 API 응답의 `careTargetId`는 GuardianTarget의 내부 id가 아니라 **대상 User의 public_id**를 그대로 사용한다.
+
+> 8절의 `userId`, `careTargetId` 예시는 이 정책에 맞춰 UUID 문자열로 갱신했다(8.1, 8.2, 8.4, 8.5 참고). Backend 구현 시 `User.public_id`, `Place.public_id` 등 실제 컬럼이 준비되기 전까지는 이 정책을 임시로 우회하지 않고, DB 컬럼 추가를 선행 작업으로 처리한다.
+
 ---
 
 ## 2. Success Response 규칙
@@ -91,7 +110,7 @@
   "message": "보호 대상자 목록 조회 성공",
   "data": {
     "content": [
-      { "careTargetId": 12, "name": "김민준", "relation": "자녀" }
+      { "careTargetId": "3f2b1a10-9c4e-4a3b-8f2c-1d5e6a7b8c9d", "name": "김민준", "relation": "자녀" }
     ],
     "page": 0,
     "size": 20,
@@ -163,7 +182,7 @@ Frontend는 `errors` 필드가 존재하면 폼의 해당 필드 아래에 인�
 
 ### 3.3 작성 기준
 
-- `message`는 절대 서버 예외 클래스명·SQL·스택 트레이스를 포함하지 않는다 (9절 보안 원칙, 안전한 오류 처리).
+- `message`는 절대 서버 예외 클래스명·SQL·스택 트레이스를 포함하지 않는다 (안전한 오류 처리 원칙 상세: `docs/security/Security_Guide.md`, 예외 계층/로깅 구조 상세: Exception Handling Rule 문서).
 - 동일한 원인이면 항상 같은 `code`를 반환해야 한다 (Frontend가 `code` 기준으로 분기하므로 code가 요청마다 달라지면 안 됨).
 - 예상치 못한 서버 오류(500)는 사용자에게 원인을 설명하지 않고 `"일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요."` 형태의 일반화된 메시지를 사용한다.
 
@@ -221,6 +240,8 @@ REST 관례상 HTTP Status와 Response Body의 `success`는 항상 일치해야 
 | COMMON_003 | 404 | 요청한 URI/리소스를 찾을 수 없음 |
 | COMMON_004 | 405 | 지원하지 않는 HTTP Method |
 | COMMON_005 | 429 | 요청 횟수 초과 (Rate Limit, AI/외부 API 보호용) |
+| COMMON_006 | 403 | 요청자의 Role로는 접근할 수 없는 API 호출 (Guardian API 이외의 Role 전용 API) |
+| COMMON_007 | 503 | Redis가 Source of Truth인 세션/보안 데이터(Refresh Token, JWT Blacklist) 접근 중 Redis 장애 발생 (Exception_Handling_Rule.md §10.4, 폴백 없이 명시적 실패 처리) |
 
 #### 인증 (AUTH)
 
@@ -240,6 +261,7 @@ REST 관례상 HTTP Status와 Response Body의 `success`는 항상 일치해야 
 | USER_001 | 404 | 사용자를 찾을 수 없음 |
 | USER_002 | 409 | 이미 가입된 사용자(OAuth 이메일 중복) |
 | USER_003 | 400 | Role 미선택 상태(최초 로그인 후 Guardian/CareTarget 선택 필요) |
+| USER_004 | 409 | 이미 Role이 확정된 사용자가 `PUT /api/auth/role`을 재호출(Role은 최초 1회만 선택 가능, 이후 임의 변경 불가 — 기획서 정책) |
 
 #### 보호자 (GUARDIAN)
 
@@ -263,6 +285,7 @@ REST 관례상 HTTP Status와 Response Body의 `success`는 항상 일치해야 
 | LOCATION_001 | 400 | 위도/경도 값이 유효 범위를 벗어남 |
 | LOCATION_002 | 404 | 조회 가능한 최신 위치 데이터 없음(Redis/DB 모두 없음) |
 | LOCATION_003 | 403 | CareTarget이 아닌 사용자가 위치 전송 API 호출 |
+| LOCATION_004 | 403 | CareTarget이 아닌 사용자가 현재 위치 공유(`POST /api/care-target/share/location`) API 호출 |
 
 #### 장소 관리 (PLACE)
 
@@ -289,6 +312,37 @@ REST 관례상 HTTP Status와 Response Body의 `success`는 항상 일치해야 
 | AI_003 | 404 | AI 예측 결과 없음(학습 데이터 부족) |
 | AI_004 | 429 | LLM API 호출 한도 초과 |
 
+#### 방문 히스토리 (VISIT)
+
+`GET /api/guardian/history/*`(오늘 이동, 날짜별, 장소별 조회)는 `VisitHistory` 테이블 기준이며, 최신 위치 캐시가 대상인 `LOCATION` 도메인과 별개로 관리한다.
+
+| code | HTTP Status | 상황 |
+|---|---|---|
+| VISIT_001 | 404 | 조회 조건(날짜/장소)에 해당하는 방문 이력이 없음 |
+| VISIT_002 | 400 | 조회 기간(시작일-종료일) 값이 유효 범위를 벗어남 |
+
+#### 도착 확인 (ARRIVAL)
+
+`POST /api/care-target/arrival/check`, `GET /api/care-target/arrival/history` 전용 도메인.
+
+| code | HTTP Status | 상황 |
+|---|---|---|
+| ARRIVAL_001 | 403 | CareTarget이 아닌 사용자가 도착 확인 API 호출 |
+| ARRIVAL_002 | 400 | 현재 위치가 등록된 장소(GeoFence) 반경 밖이라 도착 확인이 성립하지 않음 |
+| ARRIVAL_003 | 404 | 조회 가능한 도착 기록이 없음 |
+
+#### 긴급 연락 (EMERGENCY)
+
+`POST /api/care-target/emergency/call`, `/message`, `/location` 전용 도메인. 이 도메인은 서비스의 안전(Safety) 핵심 기능이므로, 실패 시에도 `NotificationHistory.status='FAILED'`로 반드시 이력을 남기고 재시도/에스컬레이션한다(fail-safe 원칙, 상세: `docs/security/Security_Guide.md`).
+
+| code | HTTP Status | 상황 |
+|---|---|---|
+| EMERGENCY_001 | 403 | CareTarget이 아닌 사용자가 긴급 연락 API 호출 |
+| EMERGENCY_002 | 400 | 등록된 보호자 연락처가 없어 전화/문자 발송 대상이 없음 |
+| EMERGENCY_003 | 500 | 전화 연동(통신사 API 등) 또는 SMS 발송 자체가 실패 |
+
+> EMERGENCY_003은 COMMON_001과 달리 일반화된 메시지로 덮지 않고, Frontend가 "다른 연락 수단(예: 위치 전송만이라도 재시도)"으로 즉시 폴백할 수 있도록 `code`를 그대로 노출한다(7.6절 사용자 메시지 표시 기준에 반영).
+
 ---
 
 ## 6. Backend 구현 기준 (Spring Boot)
@@ -296,10 +350,11 @@ REST 관례상 HTTP Status와 Response Body의 `success`는 항상 일치해야 
 ### 6.1 패키지 구조 (Response 관련)
 
 ```
-com.gis.care
+com.tracecare.backend
  ├─ common
  │   ├─ response
  │   │   ├─ ApiResponse.java          // 공통 응답 래퍼
+ │   │   ├─ SuccessCode.java          // 성공 코드 Enum (2.3절과 1:1 매핑)
  │   │   ├─ PageResponse.java         // 목록 응답용 페이징 DTO
  │   │   └─ ErrorResponse.java        // Validation errors 포함 응답
  │   ├─ exception
@@ -350,6 +405,31 @@ public class ApiResponse<T> {
 }
 ```
 
+`SuccessCode`는 `ErrorCode`(5.2절)와 동일한 패턴의 Enum이다. 성공 응답은 항상 2xx이므로 `HttpStatus` 필드는 두지 않고 `code`/`message`만 갖는다. 아래는 2.3절 표의 값을 그대로 반영한 예시다(신규 성공 코드가 필요하면 이 문서가 아니라 2.3절 표에 먼저 추가한다).
+
+```java
+@Getter
+@RequiredArgsConstructor
+public enum SuccessCode {
+    AUTH_001("AUTH_001", "로그인 성공"),
+    AUTH_002("AUTH_002", "토큰 재발급 성공"),
+    AUTH_003("AUTH_003", "로그아웃 성공"),
+    USER_001("USER_001", "사용자 정보 조회 성공"),
+    USER_002("USER_002", "프로필 수정 성공"),
+    TARGET_001("TARGET_001", "보호 대상자 목록/상세 조회 성공"),
+    TARGET_002("TARGET_002", "보호 대상자 등록 성공"),
+    LOCATION_001("LOCATION_001", "위치 조회 성공"),
+    LOCATION_002("LOCATION_002", "위치 전송 성공"),
+    PLACE_001("PLACE_001", "장소(안심구역) 등록/조회 성공"),
+    NOTI_001("NOTI_001", "알림 조회 성공"),
+    NOTI_002("NOTI_002", "알림 읽음 처리 성공"),
+    AI_001("AI_001", "AI 응답 생성 성공");
+
+    private final String code;
+    private final String message;
+}
+```
+
 ```java
 @Getter
 @Builder
@@ -384,51 +464,15 @@ public ApiResponse<PageResponse<CareTargetResponse>> getCareTargets(
 }
 ```
 
-### 6.3 GlobalExceptionHandler 연동
+### 6.3 예외 처리와 Response 포맷의 매핑 계약
 
-모든 예외는 컨트롤러에서 직접 try-catch 하지 않고, `CustomException`을 던진 뒤 `@RestControllerAdvice`에서 일괄 변환한다. 이렇게 하면 5절의 Error Code 표와 실제 응답이 항상 1:1로 매핑된다.
+> 이 절은 **Response 포맷 준수 관점**만 다룬다. `CustomException` 계층 설계, `@RestControllerAdvice` 핸들러별 상세 구현, 로깅 레벨 기준은 Exception Handling Rule 문서가 담당하며 여기서 다시 정의하지 않는다.
 
-```java
-@RestControllerAdvice
-public class GlobalExceptionHandler {
+이 문서가 Backend 구현에 요구하는 계약은 아래 3가지뿐이다.
 
-    @ExceptionHandler(CustomException.class)
-    public ResponseEntity<ApiResponse<Void>> handleCustomException(CustomException e) {
-        ErrorCode code = e.getErrorCode();
-        log.warn("[{}] {}", code.getCode(), e.getMessage()); // 내부 로그에는 상세 기록
-        return ResponseEntity
-                .status(code.getHttpStatus())
-                .body(ApiResponse.error(code));
-    }
-
-    @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<ErrorResponse> handleValidation(MethodArgumentNotValidException e) {
-        List<FieldErrorDetail> errors = e.getBindingResult().getFieldErrors().stream()
-                .map(f -> new FieldErrorDetail(f.getField(), f.getDefaultMessage()))
-                .toList();
-        return ResponseEntity
-                .status(HttpStatus.BAD_REQUEST)
-                .body(ErrorResponse.of(ErrorCode.COMMON_002, errors));
-    }
-
-    @ExceptionHandler(AccessDeniedException.class)
-    public ResponseEntity<ApiResponse<Void>> handleAccessDenied(AccessDeniedException e) {
-        return ResponseEntity
-                .status(HttpStatus.FORBIDDEN)
-                .body(ApiResponse.error(ErrorCode.GUARDIAN_001)); // 상황에 맞는 코드로 세분화
-    }
-
-    @ExceptionHandler(Exception.class)
-    public ResponseEntity<ApiResponse<Void>> handleUnknown(Exception e) {
-        log.error("Unhandled exception", e); // 스택 트레이스는 로그에만 남기고 응답에는 노출 금지
-        return ResponseEntity
-                .status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(ApiResponse.error(ErrorCode.COMMON_001));
-    }
-}
-```
-
-**핵심 원칙**: 401/403은 Spring Security 레벨(Filter 단계)에서 발생하므로 `GlobalExceptionHandler`가 아니라 `AuthenticationEntryPoint`(401)와 `AccessDeniedHandler`(403)에서 동일한 `ApiResponse` 포맷으로 응답한다. 이 두 경로에서도 반드시 같은 `ApiResponse.error()`를 사용해 형식이 갈라지지 않도록 한다.
+1. **어떤 예외 경로를 거치든 최종 응답 Body는 반드시 `ApiResponse.error(ErrorCode)` 형식**이어야 한다 — Controller/Service 계층 예외(`GlobalExceptionHandler`), Filter 계층 예외(`AuthenticationEntryPoint`/`AccessDeniedHandler`) 모두 동일.
+2. `ErrorCode`의 `httpStatus`와 5절 표의 HTTP Status가 항상 일치해야 한다(4절 원칙).
+3. 401/403은 Spring Security 필터 단계에서 발생해 `GlobalExceptionHandler`(Controller/Service 계층)를 거치지 않으므로, `AuthenticationEntryPoint`/`AccessDeniedHandler`에서도 **같은 `ApiResponse.error()`**를 사용해 포맷이 갈라지지 않게 한다. 예:
 
 ```java
 @Component
@@ -443,6 +487,8 @@ public class CustomAuthenticationEntryPoint implements AuthenticationEntryPoint 
 }
 ```
 
+상세 예외 계층(`CustomException`, `AuthException`, `ResourceNotFoundException` 등), `GlobalExceptionHandler`의 `@ExceptionHandler`별 처리 순서, Validation 예외의 `errors` 필드 조립 로직은 Exception Handling Rule 문서를 따른다.
+
 ### 6.4 ErrorCode Enum 예시
 
 ```java
@@ -450,23 +496,29 @@ public class CustomAuthenticationEntryPoint implements AuthenticationEntryPoint 
 @RequiredArgsConstructor
 public enum ErrorCode {
     // Common
-    COMMON_001(HttpStatus.INTERNAL_SERVER_ERROR, "일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요."),
-    COMMON_002(HttpStatus.BAD_REQUEST, "입력값이 올바르지 않습니다"),
+    COMMON_001("COMMON_001", HttpStatus.INTERNAL_SERVER_ERROR, "일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요."),
+    COMMON_002("COMMON_002", HttpStatus.BAD_REQUEST, "입력값이 올바르지 않습니다"),
 
     // Auth
-    AUTH_001(HttpStatus.UNAUTHORIZED, "인증이 필요합니다"),
-    AUTH_002(HttpStatus.UNAUTHORIZED, "토큰이 만료되었습니다"),
+    AUTH_001("AUTH_001", HttpStatus.UNAUTHORIZED, "인증이 필요합니다"),
+    AUTH_002("AUTH_002", HttpStatus.UNAUTHORIZED, "토큰이 만료되었습니다"),
 
     // Target
-    TARGET_002(HttpStatus.FORBIDDEN, "접근 권한이 없는 보호대상자입니다"),
+    TARGET_002("TARGET_002", HttpStatus.FORBIDDEN, "접근 권한이 없는 보호대상자입니다"),
 
     // AI
-    AI_001(HttpStatus.INTERNAL_SERVER_ERROR, "AI 서버 응답이 지연되고 있습니다");
+    AI_001("AI_001", HttpStatus.INTERNAL_SERVER_ERROR, "AI 서버 응답이 지연되고 있습니다"),
 
+    // Emergency
+    EMERGENCY_003("EMERGENCY_003", HttpStatus.INTERNAL_SERVER_ERROR, "긴급 연락 발송에 실패했습니다. 다시 시도해주세요");
+
+    private final String code;
     private final HttpStatus httpStatus;
     private final String message;
 }
 ```
+
+> `code` 필드는 원래 예시에서 누락되어 있었으나(§6.2 `ApiResponse.error()`가 `code.getCode()`를 호출하는 것과 모순), `SuccessCode`와 동일한 패턴으로 보완했다.
 
 ---
 
@@ -598,6 +650,7 @@ class AuthErrorHandler {
 | 인증 만료 (401 → 로그아웃) | Toast + 자동 화면 전환 |
 | 서버 오류 (500) | Dialog + "다시 시도" 버튼 |
 | AI 응답 지연 (AI_001) | 로딩 상태 유지 + "AI 응답이 지연되고 있어요" 안내 텍스트 (다이얼로그로 끊지 않음) |
+| 긴급 연락 실패 (EMERGENCY_003) | Dialog + "다시 시도" 버튼과 함께 대체 연락 수단(예: 위치만 재전송) 버튼을 동시에 노출 — 일반 500과 동일한 단순 재시도 UI로 처리하지 않는다 |
 
 ---
 
@@ -625,22 +678,31 @@ Google OAuth로 1차 인증 후, Spring Boot가 자체 JWT(Access/Refresh)를 �
     "accessToken": "eyJhbGciOiJIUzI1NiIs...",
     "refreshToken": "eyJhbGciOiJIUzI1NiIs...",
     "role": "GUARDIAN",
-    "userId": 101,
+    "userId": "a1b2c3d4-e5f6-47a8-9b0c-1d2e3f4a5b6c",
     "roleSelected": true
   }
 }
 ```
 
-**Error — 신규 사용자, 첫 로그인이라 Role 미선택 (200, 별도 흐름 안내)**
+**Success — 신규 사용자, 첫 로그인이라 Role 미선택 (200)**
+
+토큰은 Role 확정 여부와 무관하게 항상 정상 발급한다 — `PUT /api/auth/role`도 인증이 필요한 API이므로, 이 시점에 토큰을 주지 않으면 클라이언트가 그 API 자체를 호출할 수 없다. `success: true`, `code: AUTH_001`은 그대로 두고 `role`이 `null`, `roleSelected`가 `false`인 것으로 "Role 미선택" 상태를 나타낸다. `USER_003`은 이 로그인 응답에서 쓰지 않는다(용도: `PUT /api/auth/role` 외의 인증된 API를 Role 미확정 사용자가 호출할 때 등, 이 문서 5.2절 표 그대로 400).
+
 ```json
 {
-  "success": false,
-  "code": "USER_003",
-  "message": "역할(보호자/보호대상자) 선택이 필요합니다",
-  "data": null
+  "success": true,
+  "code": "AUTH_001",
+  "message": "로그인 성공",
+  "data": {
+    "accessToken": "eyJhbGciOiJIUzI1NiIs...",
+    "refreshToken": "eyJhbGciOiJIUzI1NiIs...",
+    "role": null,
+    "userId": "a1b2c3d4-e5f6-47a8-9b0c-1d2e3f4a5b6c",
+    "roleSelected": false
+  }
 }
 ```
-Flutter는 이 코드를 받으면 Role 선택 화면으로 이동시키고, 이후 `PUT /api/auth/role`로 Role을 확정한다. (별도 회원가입 폼 없이 OAuth 최초 로그인 = 자동 가입, Role 선택으로 온보딩 완료라는 이 프로젝트의 특성을 반영한 흐름이다.)
+Flutter는 `roleSelected: false`를 보고 Role 선택 화면으로 이동시키고, 발급받은 토큰으로 `PUT /api/auth/role`을 호출해 Role을 확정한다. (별도 회원가입 폼 없이 OAuth 최초 로그인 = 자동 가입, Role 선택으로 온보딩 완료라는 이 프로젝트의 특성을 반영한 흐름이다.)
 
 **Error — Google 인증 실패 (401)**
 ```json
@@ -662,7 +724,7 @@ Flutter는 이 코드를 받으면 Role 선택 화면으로 이동시키고, 이
   "success": true,
   "code": "USER_002",
   "message": "회원 정보 등록이 완료되었습니다",
-  "data": { "userId": 205, "role": "CARE_TARGET" }
+  "data": { "userId": "b2c3d4e5-f6a7-48b9-0c1d-2e3f4a5b6c7d", "role": "CARE_TARGET" }
 }
 ```
 
@@ -699,7 +761,7 @@ Flutter는 이 코드를 받으면 Role 선택 화면으로 이동시키고, 이
   "code": "LOCATION_001",
   "message": "위치 조회 성공",
   "data": {
-    "careTargetId": 205,
+    "careTargetId": "b2c3d4e5-f6a7-48b9-0c1d-2e3f4a5b6c7d",
     "latitude": 37.501234,
     "longitude": 127.039876,
     "recordedAt": "2026-08-06T09:15:00Z",
@@ -722,7 +784,7 @@ Flutter는 이 코드를 받으면 Role 선택 화면으로 이동시키고, 이
 
 **Request**
 ```json
-{ "careTargetUserId": 205, "relation": "자녀", "alias": "우리 아이" }
+{ "careTargetUserId": "b2c3d4e5-f6a7-48b9-0c1d-2e3f4a5b6c7d", "relation": "자녀", "alias": "우리 아이" }
 ```
 
 **Success (201)**
@@ -731,7 +793,7 @@ Flutter는 이 코드를 받으면 Role 선택 화면으로 이동시키고, 이
   "success": true,
   "code": "TARGET_002",
   "message": "보호 대상자 등록 성공",
-  "data": { "careTargetId": 12, "name": "김민준", "relation": "자녀" }
+  "data": { "careTargetId": "3f2b1a10-9c4e-4a3b-8f2c-1d5e6a7b8c9d", "name": "김민준", "relation": "자녀" }
 }
 ```
 
@@ -775,6 +837,59 @@ Flutter는 이 코드를 받으면 Role 선택 화면으로 이동시키고, 이
 ```
 이 에러는 사용자에게 직접 전달되지 않고 서버 로그와 재발송 큐 처리에 사용되므로, `NotificationHistory`의 상태 컬럼(`FAILED`)으로 남긴다. GeoFence 도착 감지 후 5분 미응답 시 재알림 로직(기획서 8.3절 참고)도 동일한 `NOTI_002` 기준으로 재시도 여부를 판단한다.
 
+### 8.7 방문 히스토리 (`GET /api/guardian/history/date`, Guardian 전용)
+
+**Success (200)**
+```json
+{
+  "success": true,
+  "code": "VISIT_001",
+  "message": "방문 히스토리 조회 성공",
+  "data": {
+    "content": [
+      { "placeName": "학교", "arrivalTime": "2026-08-06T08:35:00Z", "departureTime": "2026-08-06T15:20:00Z", "stayMinutes": 405, "isRegisteredPlace": true }
+    ],
+    "page": 0, "size": 20, "totalElements": 1, "totalPages": 1
+  }
+}
+```
+
+**Error — 조회 조건에 해당하는 방문 이력 없음 (404)**
+```json
+{ "success": false, "code": "VISIT_001", "message": "조회 가능한 방문 이력이 없습니다", "data": null }
+```
+> `VISIT_001`은 5.2절 정의상 성공/실패 번호 공간이 분리되므로(5.1절), 조회 성공 코드와 404 에러 코드가 같은 문자열을 공유하는 것처럼 보이지 않도록 Backend 구현 시 `SuccessCode.VISIT_001`과 `ErrorCode.VISIT_001`을 별도 Enum으로 관리한다(3.1절 주의 사항과 동일한 패턴).
+
+### 8.8 도착 확인 (`POST /api/care-target/arrival/check`, CareTarget 전용)
+
+**Request**
+```json
+{ "placeId": "c3d4e5f6-a7b8-49c0-1d2e-3f4a5b6c7d8e", "latitude": 37.501234, "longitude": 127.039876 }
+```
+
+**Success (201)**
+```json
+{ "success": true, "code": "ARRIVAL_001", "message": "도착 확인 성공", "data": { "arrivalId": 4021, "placeName": "학교", "confirmedAt": "2026-08-06T08:35:00Z" } }
+```
+
+**Error — 등록 장소 반경 밖에서 요청 (400)**
+```json
+{ "success": false, "code": "ARRIVAL_002", "message": "등록된 장소 범위를 벗어나 도착 확인이 불가능합니다", "data": null }
+```
+
+### 8.9 긴급 연락 (`POST /api/care-target/emergency/call`, CareTarget 전용)
+
+**Success (200)** — 통신사 API/SMS 연동을 통해 보호자에게 즉시 연락
+```json
+{ "success": true, "code": "NOTI_001", "message": "보호자에게 긴급 연락을 전송했습니다", "data": { "notificationId": 5599, "guardianContacted": true } }
+```
+
+**Error — 연동 자체가 실패 (500, fail-safe 대상)**
+```json
+{ "success": false, "code": "EMERGENCY_003", "message": "긴급 연락 발송에 실패했습니다. 다시 시도해주세요", "data": null }
+```
+> `EMERGENCY_003`은 재시도 로직(Frontend 자동 재시도 1회 + 실패 시 대체 수단 안내)과 반드시 함께 구현한다. 안전 기능이므로 COMMON_001의 일반화된 재시도 문구로 대체하지 않는다(안전 관련 fail-safe 원칙, `docs/security/Security_Guide.md` 및 `.claude/rules/security.md` 4절 참고).
+
 ---
 
 ## 부록: 체크리스트 (PR 리뷰용)
@@ -785,3 +900,5 @@ Flutter는 이 코드를 받으면 Role 선택 화면으로 이동시키고, 이
 - [ ] 목록 API가 `PageResponse` 구조를 따르는가
 - [ ] `message`에 예외 메시지·스택 트레이스가 그대로 노출되지 않는가
 - [ ] Flutter에서 새 API를 추가할 때 공통 `ApiResponse.fromJson`으로 파싱하는가 (개별 파서 작성 금지)
+- [ ] Master Data(User/Place) 식별자를 응답에 노출할 때 내부 PK가 아닌 `public_id`(UUID)를 사용했는가, GuardianTarget(`careTargetId`)은 대상 User의 `public_id`를 쓰고 있는가 (1.5절)
+- [ ] EMERGENCY 등 안전(Safety) 관련 API의 실패가 `NotificationHistory.status='FAILED'` 등으로 반드시 이력이 남는가 (fail-open 금지)

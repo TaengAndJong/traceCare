@@ -1,10 +1,13 @@
 -- =====================================================================
 -- TraceCare 프로젝트 — PostgreSQL DDL
--- 기준 문서: TraceCare_DB_Design_Final.md v6.0 (최종 확정본)
+-- 기준 문서: DATABASE_DESIGN_GUIDE.md v6.1 (최종 확정본 — Place.public_id 컬럼 추가 반영)
 -- 대상 버전: PostgreSQL 15 이상 (검증 환경: PostgreSQL 16.14 + pgvector 0.6.0)
 -- 생성 원칙: 설계 가이드에 정의되지 않은 내용은 임의로 추가하지 않으며,
 --            문법상 불가피한 구현 세부사항은 가장 보수적인 방식으로 적용하고
 --            본문 하단 [DDL 실행 순서 설명] 및 채팅 응답의 [결정 필요] 절에서 별도 설명한다.
+-- v6.1 변경: Place에 public_id(UUID) 컬럼 및 UNIQUE 제약 추가 — §8/§13 결정 반영,
+--            IDOR 방지 목적으로 User와 동일한 패턴 적용. GuardianTarget은 별도 public_id를
+--            두지 않음(대상 User의 public_id로 충분히 식별 가능, API_Response_Rule.md §1.5).
 -- =====================================================================
 
 
@@ -34,9 +37,10 @@ CREATE TABLE "User" (
     email           VARCHAR(255) NOT NULL,
     oauth_provider  VARCHAR(20) NOT NULL DEFAULT 'GOOGLE',
     oauth_id        VARCHAR(255) NOT NULL,
-    name            VARCHAR(100) NOT NULL,
+    name            VARCHAR(100),
+    birth_date      DATE,
     phone           VARCHAR(20),
-    role            VARCHAR(20) NOT NULL,
+    role            VARCHAR(20),
     profile_image   TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -76,6 +80,7 @@ COMMENT ON TABLE "GuardianTarget" IS 'Guardian-CareTarget M:N 관계 해소 테�
 -- ---------------------------------------------------------------------
 CREATE TABLE "Place" (
     id              BIGINT GENERATED ALWAYS AS IDENTITY,
+    public_id       UUID NOT NULL DEFAULT gen_random_uuid(),
     user_id         BIGINT NOT NULL,
     name            VARCHAR(150) NOT NULL,
     address         TEXT,
@@ -88,6 +93,7 @@ CREATE TABLE "Place" (
     deleted_at      TIMESTAMPTZ,
 
     CONSTRAINT pk_place PRIMARY KEY (id),
+    CONSTRAINT uk_place_public_id UNIQUE (public_id),
     CONSTRAINT ck_place_lat CHECK (latitude BETWEEN -90 AND 90),
     CONSTRAINT ck_place_lng CHECK (longitude BETWEEN -180 AND 180),
     CONSTRAINT ck_place_radius CHECK (radius > 0)
@@ -368,6 +374,8 @@ CREATE UNIQUE INDEX uq_gt_primary_per_target
 -- ---------------------------------------------------------------------
 -- Place
 -- ---------------------------------------------------------------------
+-- uk_place_public_id는 02절 UNIQUE 제약 선언 시 PostgreSQL이 자동으로
+-- 동일 이름의 인덱스를 생성하므로 별도 CREATE INDEX 불필요(User의 uk_user_public_id와 동일 패턴).
 CREATE INDEX idx_place_user
     ON "Place" (user_id)
     WHERE deleted_at IS NULL;
