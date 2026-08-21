@@ -29,9 +29,9 @@ repositories {
 val jjwtVersion = "0.12.6"
 val googleApiClientVersion = "2.9.0"
 val googleHttpClientGsonVersion = "2.1.0"
-// Spring Boot 3.3.4 기준 안정 검증된 1.x 라인 고정(2.0.x는 org.testcontainers.containers.PostgreSQLContainer
-// 패키지 이동 등 breaking change가 있고 Spring Boot 쪽 대응이 아직 진행 중이라 3.3.4엔 맞지 않는다고 판단).
-val testcontainersVersion = "1.20.4"
+// 이 개발 환경(Windows, 최신 Docker Desktop/Engine)에서 1.20.4에 내장된 구버전 docker-java 클라이언트가
+// Docker API 버전 협상에 실패해 Testcontainers가 데몬을 못 찾는 문제가 있어 2.x로 올렸다(사용자 확인 완료).
+val testcontainersVersion = "2.0.5"
 
 dependencies {
     implementation("org.springframework.boot:spring-boot-starter-web")
@@ -61,8 +61,8 @@ dependencies {
 
     testImplementation("org.springframework.boot:spring-boot-testcontainers")
     testImplementation("org.testcontainers:testcontainers:$testcontainersVersion")
-    testImplementation("org.testcontainers:junit-jupiter:$testcontainersVersion")
-    testImplementation("org.testcontainers:postgresql:$testcontainersVersion")
+    testImplementation("org.testcontainers:testcontainers-junit-jupiter:$testcontainersVersion")
+    testImplementation("org.testcontainers:testcontainers-postgresql:$testcontainersVersion")
 }
 
 tasks.withType<Test> {

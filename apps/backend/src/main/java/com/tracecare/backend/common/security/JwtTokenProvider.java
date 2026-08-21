@@ -1,6 +1,7 @@
 package com.tracecare.backend.common.security;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.Date;
 import java.util.List;
 import java.util.UUID;
@@ -42,25 +43,32 @@ public class JwtTokenProvider {
     }
 
     public String generateAccessToken(Long userId, String role) {
-        return generateToken(userId, role, TOKEN_TYPE_ACCESS, accessTokenExpiration);
+        return generateToken(userId, role, TOKEN_TYPE_ACCESS, accessTokenExpiration).token();
     }
 
-    public String generateRefreshToken(Long userId, String role) {
+    /**
+     * Refresh Token 발급 시 만료 시각을 함께 반환한다. Redis TTL 계산 등 만료 시각이 필요한 호출부(TokenService)가 별도 설정값을 다시 읽지
+     * 않고 이 발급 결과를 그대로 쓰게 하기 위함이다 — Blacklist TTL을 토큰을 파싱해 남은 만료 시간을 구하는 방식(getRemainingMillis)과 같은
+     * 원칙: "만료 시각 계산은 이 클래스 하나에서만 한다."
+     */
+    public TokenInfo generateRefreshToken(Long userId, String role) {
         return generateToken(userId, role, TOKEN_TYPE_REFRESH, refreshTokenExpiration);
     }
 
-    private String generateToken(Long userId, String role, String type, long expirationMillis) {
+    private TokenInfo generateToken(Long userId, String role, String type, long expirationMillis) {
         Date now = new Date();
         Date expiry = new Date(now.getTime() + expirationMillis);
-        return Jwts.builder()
-                .subject(String.valueOf(userId))
-                .claim(CLAIM_ROLE, role)
-                .claim(CLAIM_TYPE, type)
-                .id(UUID.randomUUID().toString())
-                .issuedAt(now)
-                .expiration(expiry)
-                .signWith(key)
-                .compact();
+        String token =
+                Jwts.builder()
+                        .subject(String.valueOf(userId))
+                        .claim(CLAIM_ROLE, role)
+                        .claim(CLAIM_TYPE, type)
+                        .id(UUID.randomUUID().toString())
+                        .issuedAt(now)
+                        .expiration(expiry)
+                        .signWith(key)
+                        .compact();
+        return new TokenInfo(token, expiry.toInstant());
     }
 
     /** 서명/만료 검증을 포함해 Claims를 파싱한다. 실패 시 io.jsonwebtoken의 JwtException 계열을 그대로 던진다. */
@@ -97,4 +105,6 @@ public class JwtTokenProvider {
         return new UsernamePasswordAuthenticationToken(
                 userDetails, null, List.copyOf(userDetails.getAuthorities()));
     }
+
+    public record TokenInfo(String token, Instant expiresAt) {}
 }

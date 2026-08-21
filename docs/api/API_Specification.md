@@ -83,6 +83,24 @@
 
 성공 코드: `USER_001`
 
+### 2.4 `POST /api/auth/logout`
+
+| 구분 | 필드 | 타입 | 설명 |
+|---|---|---|---|
+| Request | - | - | Body 없음. `Authorization` 헤더의 Access Token 기준으로 처리 |
+| Response | `data` | - | `null` |
+
+성공 코드: `AUTH_003`
+
+### 2.5 `POST /api/auth/refresh`
+
+| 구분 | 필드 | 타입 | 설명 |
+|---|---|---|---|
+| Request | `refreshToken` | string | 재발급에 사용할 Refresh Token |
+| Response | `accessToken`, `refreshToken` | string | 새로 발급된 JWT 쌍(Rotation — 기존 Refresh Token은 이 시점에 즉시 무효화됨) |
+
+성공 코드: `AUTH_002` · 주요 실패 코드: `AUTH_004`(Refresh Token 만료/유효하지 않음/이미 사용된 토큰 재사용 감지 — 재로그인 필요)
+
 ---
 
 ## 3. 보호자(Guardian) API
@@ -91,25 +109,30 @@
 
 ### 3.1 보호 대상자 관리
 
+> **관계 생성 방식(확정)**: `GuardianTarget` 행은 직접 INSERT되지 않고 **초대(Invitation) + CareTarget 승인** 절차로만 생성된다(`DATABASE_DESIGN_GUIDE.md` §3.2/§7). Guardian이 CareTarget의 `public_id`를 알고 있다고 해서 곧바로 관계를 만들 수 없다 — CareTarget이 발급한 초대 코드를 Guardian이 입력해 "연결 요청"을 접수시키고, CareTarget이 그 요청을 승인해야 비로소 관계가 생성된다. 초대 코드 발급/승인/거절 API는 §4.7(CareTarget API) 참고.
+
 | Method | URI | 설명 |
 |---|---|---|
-| GET | `/api/guardian/care-targets` | 보호 대상자 목록 (페이징) |
-| POST | `/api/guardian/care-targets` | 보호 대상자 등록(관계 생성) |
+| GET | `/api/guardian/care-targets` | 보호 대상자 목록 (페이징, 승인 완료된 관계만) |
+| POST | `/api/guardian/care-targets` | 초대 코드 입력으로 연결 요청 (관계는 CareTarget 승인 후 생성됨 — 즉시 생성 아님) |
 | GET | `/api/guardian/care-targets/{id}` | 상세 조회 |
-| PUT | `/api/guardian/care-targets/{id}` | 관계 정보(관계 라벨, 별칭 등) 수정 |
+| PUT | `/api/guardian/care-targets/{id}` | 관계 정보(관계 라벨, 별칭 등) 수정 — 승인 완료된 관계에 한함 |
 | DELETE | `/api/guardian/care-targets/{id}` | 관계 해제(삭제) |
 
 `{id}` = 대상 CareTarget(User)의 `public_id` (GuardianTarget 자체는 별도 `public_id`가 없음, §1 참고).
 
 | 구분 | 필드 | 타입 | 설명 |
 |---|---|---|---|
-| Request(등록) | `careTargetUserId` | string(UUID) | 등록할 CareTarget의 `public_id` |
-| Request(등록) | `relation` | string | 관계(예: 자녀) |
-| Request(등록) | `alias` | string | 보호자가 지정하는 별칭 |
-| Response | `careTargetId` | string(UUID) | 대상 User의 `public_id` (GuardianTarget.id 아님) |
-| Response | `name`, `relation` | - | 표시용 정보 |
+| Request(연결 요청) | `inviteCode` | string | CareTarget이 발급한 초대 코드 |
+| Response(연결 요청) | `careTargetId` | string(UUID) | 코드로 확인된 대상 User의 `public_id`(입력한 코드가 맞는 사람인지 확인용) |
+| Response(연결 요청) | `name` | string | 대상 CareTarget 이름(표시용) |
+| Response(연결 요청) | `status` | string | 항상 `"PENDING"` — 이 응답은 관계 생성이 아니라 요청 접수를 의미 |
+| Response(목록/상세) | `careTargetId` | string(UUID) | 대상 User의 `public_id` (GuardianTarget.id 아님) |
+| Response(목록/상세) | `name`, `relation` | - | 표시용 정보 |
 
-성공 코드: `TARGET_001`(조회) / `TARGET_002`(등록) · 주요 실패 코드: `TARGET_001`(404, 대상 없음), `TARGET_002`(403, 관계 미매핑 리소스 접근), `TARGET_003`(409, 중복 등록), `USER_001`(등록 시 `careTargetUserId`가 존재하지 않는 사용자)
+`relation`/`alias`는 연결 요청 시점에는 받지 않는다 — 승인이 완료되어 관계가 생성된 뒤 `PUT /api/guardian/care-targets/{id}`로 설정한다(§2 확인 사항).
+
+성공 코드: `TARGET_001`(목록/상세 조회) / `TARGET_005`(연결 요청 접수, §4.7 참고) · 주요 실패 코드: `TARGET_001`(404, 대상 없음), `TARGET_002`(403, 관계 미매핑 리소스 접근), `TARGET_004`(400, 초대 코드 무효/만료), `TARGET_006`(409, 이미 대기 중인 동일 요청 존재)
 
 ### 3.2 장소(안심구역) 관리
 
@@ -284,6 +307,32 @@ VisitHistory 기준(가공된 "방문 단위" 데이터). 원본 GPS 좌표 나�
 | PUT | `/api/care-target/profile` | 내 정보 수정 |
 
 성공 코드: `NOTI_001` / `USER_001` / `USER_002`
+
+### 4.7 보호자 연결 관리 (초대)
+
+> Guardian이 CareTarget과 연결되는 유일한 경로다(`DATABASE_DESIGN_GUIDE.md` §3.2/§7 확정). CareTarget이 코드를 발급 → Guardian이 코드를 입력해 요청(§3.1) → CareTarget이 아래에서 승인/거절, 3단계로 구성된다. 코드 생성은 CareTarget 1인당 5회/일로 제한되고, 발급된 코드는 10분간 유효하며, 코드 입력 실패가 토큰당 5회 누적되면 즉시 폐기된다(`DATABASE_DESIGN_GUIDE.md` §7).
+
+| Method | URI | 설명 |
+|---|---|---|
+| POST | `/api/care-target/guardians/invite-code` | 초대 코드 생성 |
+| GET | `/api/care-target/guardians/pending` | 승인 대기 중인 연결 요청 목록 |
+| POST | `/api/care-target/guardians/pending/{guardianId}/approve` | 요청 승인 (관계 생성) |
+| POST | `/api/care-target/guardians/pending/{guardianId}/reject` | 요청 거절 |
+
+`{guardianId}` = 대기 목록에 나타난 요청자 Guardian의 `public_id`.
+
+| 구분 | 필드 | 타입 | 설명 |
+|---|---|---|---|
+| Response(코드 생성) | `inviteCode` | string | 발급된 초대 코드 |
+| Response(코드 생성) | `expiresAt` | string(ISO-8601 UTC) | 발급 시각 + 10분 |
+| Response(대기 목록) | `guardianId` | string(UUID) | 요청한 Guardian의 `public_id` |
+| Response(대기 목록) | `name` | string | 요청한 Guardian 이름(승인 대상 확인용) |
+| Response(승인) | `guardianId` | string(UUID) | 승인된 Guardian의 `public_id` |
+| Response(승인) | `guardianRole` | string | `PRIMARY`(해당 CareTarget의 첫 승인 Guardian) / `SUB`(이후 승인) — §2 확인 사항 |
+| Response(승인) | `relation`, `alias` | string(nullable) | 승인 직후에는 항상 `null` — 관계 자체가 이 시점에 막 생성되어 아직 라벨이 없다. Guardian이 이후 `PUT /api/guardian/care-targets/{id}`(§3.1)로 별도 설정한다 |
+| Response(거절) | `data` | - | `null` |
+
+성공 코드: `TARGET_003`(코드 생성) / `TARGET_004`(대기 목록 조회) / `TARGET_002`(승인, `GuardianTarget` 행이 실제로 생성되는 시점이므로 §3.1의 "등록 성공"과 동일 코드 재사용) / `TARGET_006`(거절) · 주요 실패 코드: `TARGET_005`(409, ACTIVE Guardian 정원 3명 초과 — 승인 시점에 검증), `TARGET_007`(429, 코드 생성 Rate Limit 초과)
 
 ---
 

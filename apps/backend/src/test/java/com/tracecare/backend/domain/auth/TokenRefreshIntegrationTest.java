@@ -6,11 +6,19 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.Statement;
 import java.time.LocalDate;
 
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -20,11 +28,10 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
-import org.testcontainers.utility.MountableFile;
 
 import com.tracecare.backend.common.cache.CacheKeyGenerator;
 import com.tracecare.backend.domain.auth.entity.User;
@@ -43,25 +50,41 @@ import com.tracecare.backend.domain.auth.service.TokenService;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.MOCK)
 @AutoConfigureMockMvc
 @Testcontainers
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class TokenRefreshIntegrationTest {
 
     @Container
-    static PostgreSQLContainer<?> postgres =
-            new PostgreSQLContainer<>(
+    static PostgreSQLContainer postgres =
+            new PostgreSQLContainer(
                             DockerImageName.parse("pgvector/pgvector:pg18")
                                     .asCompatibleSubstituteFor("postgres"))
                     .withDatabaseName("tracecare")
                     .withUsername("tracecare")
-                    .withPassword("test")
-                    .withCopyFileToContainer(
-                            MountableFile.forHostPath(
-                                    Paths.get("../../docs/db/tracecare_schema_ddl_1.0.sql")),
-                            "/docker-entrypoint-initdb.d/schema.sql");
+                    .withPassword("test");
 
     @Container
     static GenericContainer<?> redis =
             new GenericContainer<>(DockerImageName.parse("redis:7.4-alpine"))
                     .withExposedPorts(6379);
+
+    /**
+     * docker-entrypoint-initdb.d 방식(withCopyFileToContainer)은 이 Postgres 이미지의 entrypoint가
+     * "/docker-entrypoint-initdb.d/*"를 무시하는 타이밍 이슈가 있어(entrypoint 로그로 확인) 대신 컨테이너가 완전히 뜬 뒤 JDBC로
+     * DDL 전체를 한 번에 실행한다. PgJDBC는 세미콜론으로 구분된 여러 statement(트리거 함수의 $$...$$ 블록 포함)를 하나의 execute 호출로
+     * 그대로 처리한다.
+     */
+    @BeforeAll
+    static void initSchema() throws Exception {
+        String ddl = Files.readString(Paths.get("../../docs/db/tracecare_schema_ddl_1.0.sql"));
+        try (Connection connection =
+                        DriverManager.getConnection(
+                                postgres.getJdbcUrl(),
+                                postgres.getUsername(),
+                                postgres.getPassword());
+                Statement statement = connection.createStatement()) {
+            statement.execute(ddl);
+        }
+    }
 
     @DynamicPropertySource
     static void registerProperties(DynamicPropertyRegistry registry) {
@@ -85,6 +108,7 @@ class TokenRefreshIntegrationTest {
     @Autowired private CacheKeyGenerator cacheKeyGenerator;
 
     @Test
+    @Order(1)
     @DisplayName("유효한 Refresh Token으로 재발급하면 새 토큰 쌍이 발급되고 Redis 값이 교체된다")
     void refresh_withValidToken_rotatesTokenPair() throws Exception {
         // given
@@ -113,6 +137,7 @@ class TokenRefreshIntegrationTest {
     }
 
     @Test
+    @Order(2)
     @DisplayName(
             "이미 회전되어 무효화된 Refresh Token을 재사용하면 401/AUTH_004가 나가고, 그 이후 최신 토큰으로도 전체 세션이 강제 만료된다")
     void refresh_withReusedToken_rejectsAndInvalidatesEntireSession() throws Exception {
@@ -156,6 +181,26 @@ class TokenRefreshIntegrationTest {
                                 .content("{\"refreshToken\":\"" + secondRefreshToken + "\"}"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("AUTH_004"));
+    }
+
+    @Test
+    @Order(3)
+    @DisplayName(
+            "Redis 장애 중 재발급을 시도하면 폴백 없이 503/COMMON_007로 명시적 실패 처리한다 — 이 테스트가 Redis 컨테이너를 멈추므로 항상 마지막에 실행")
+    void refresh_whenRedisUnavailable_returns503() throws Exception {
+        // given
+        User user = createConfirmedUser("refresh-redis-down-oauth-id");
+        TokenService.TokenPair tokens = tokenService.issueTokens(user.getId(), user.getRole());
+        redis.stop();
+
+        // when & then
+        mockMvc.perform(
+                        post("/api/auth/refresh")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content("{\"refreshToken\":\"" + tokens.refreshToken() + "\"}"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value("COMMON_007"));
     }
 
     private User createConfirmedUser(String oauthId) {

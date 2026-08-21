@@ -1,14 +1,13 @@
 package com.tracecare.backend.domain.auth.service;
 
 import java.time.Duration;
+import java.time.Instant;
 
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.data.redis.RedisConnectionFailureException;
-import org.springframework.data.redis.RedisSystemException;
+import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -28,7 +27,10 @@ import com.tracecare.backend.domain.auth.repository.UserRepository;
  * <p>Refresh Token/JWT Blacklist는 Redis가 Source of Truth인 보안 데이터이므로(Cache_Strategy_Guide.md §6),
  * Redis 장애 시 폴백하지 않고 COMMON_007(503)로 명시적으로 실패 처리한다(Exception_Handling_Rule.md §10.4). 이건 "값이
  * 없음/일치하지 않음"(정상 응답, AUTH_004 대상)과는 구분되는 별도 케이스다 — Redis 호출 자체를 {@link #redisGet}/{@link
- * #redisSet}/{@link #redisDelete}로 감싸 연결 실패만 골라 COMMON_007로 변환한다.
+ * #redisSet}/{@link #redisDelete}로 감싸 연결 실패만 골라 COMMON_007로 변환한다. Lettuce/Spring Data Redis가 던지는
+ * 저수준 예외(연결 실패, timeout 등)는 전부 {@code org.springframework.dao.DataAccessException} 하위로 번역되므로
+ * (RedisConnectionFailureException, RedisSystemException, QueryTimeoutException 등 개별 하위 타입을 일일이
+ * 나열하지 않고) 이 공통 상위 타입 하나로 잡는다.
  */
 @Service
 public class TokenService {
@@ -39,27 +41,25 @@ public class TokenService {
     private final RedisTemplate<String, Object> redisTemplate;
     private final CacheKeyGenerator cacheKeyGenerator;
     private final UserRepository userRepository;
-    private final long refreshTokenExpirationMillis;
 
     public TokenService(
             JwtTokenProvider jwtTokenProvider,
             RedisTemplate<String, Object> redisTemplate,
             CacheKeyGenerator cacheKeyGenerator,
-            UserRepository userRepository,
-            @Value("${jwt.refresh-token-expiration}") long refreshTokenExpirationMillis) {
+            UserRepository userRepository) {
         this.jwtTokenProvider = jwtTokenProvider;
         this.redisTemplate = redisTemplate;
         this.cacheKeyGenerator = cacheKeyGenerator;
         this.userRepository = userRepository;
-        this.refreshTokenExpirationMillis = refreshTokenExpirationMillis;
     }
 
     /** 신규 Access/Refresh 쌍을 발급하고 Refresh Token을 Redis에 저장한다(Security_Guide.md §5.5). */
     public TokenPair issueTokens(Long userId, String role) {
         String accessToken = jwtTokenProvider.generateAccessToken(userId, role);
-        String refreshToken = jwtTokenProvider.generateRefreshToken(userId, role);
-        storeRefreshToken(userId, refreshToken);
-        return new TokenPair(accessToken, refreshToken);
+        JwtTokenProvider.TokenInfo refreshTokenInfo =
+                jwtTokenProvider.generateRefreshToken(userId, role);
+        storeRefreshToken(userId, refreshTokenInfo);
+        return new TokenPair(accessToken, refreshTokenInfo.token());
     }
 
     /**
@@ -121,15 +121,16 @@ public class TokenService {
         redisSet(key, Boolean.TRUE, Duration.ofMillis(remainingMillis));
     }
 
-    private void storeRefreshToken(Long userId, String refreshToken) {
+    private void storeRefreshToken(Long userId, JwtTokenProvider.TokenInfo refreshTokenInfo) {
         String key = cacheKeyGenerator.refresh(String.valueOf(userId));
-        redisSet(key, refreshToken, Duration.ofMillis(refreshTokenExpirationMillis));
+        Duration ttl = Duration.between(Instant.now(), refreshTokenInfo.expiresAt());
+        redisSet(key, refreshTokenInfo.token(), ttl);
     }
 
     private Object redisGet(String key) {
         try {
             return redisTemplate.opsForValue().get(key);
-        } catch (RedisConnectionFailureException | RedisSystemException e) {
+        } catch (DataAccessException e) {
             log.error("event=REDIS_UNAVAILABLE, operation=GET", e);
             throw new DataAccessCustomException(ErrorCode.COMMON_007);
         }
@@ -138,7 +139,7 @@ public class TokenService {
     private void redisSet(String key, Object value, Duration ttl) {
         try {
             redisTemplate.opsForValue().set(key, value, ttl);
-        } catch (RedisConnectionFailureException | RedisSystemException e) {
+        } catch (DataAccessException e) {
             log.error("event=REDIS_UNAVAILABLE, operation=SET", e);
             throw new DataAccessCustomException(ErrorCode.COMMON_007);
         }
@@ -147,7 +148,7 @@ public class TokenService {
     private void redisDelete(String key) {
         try {
             redisTemplate.delete(key);
-        } catch (RedisConnectionFailureException | RedisSystemException e) {
+        } catch (DataAccessException e) {
             log.error("event=REDIS_UNAVAILABLE, operation=DELETE", e);
             throw new DataAccessCustomException(ErrorCode.COMMON_007);
         }

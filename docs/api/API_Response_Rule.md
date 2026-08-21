@@ -130,7 +130,11 @@
 | USER_001 | 사용자 정보 조회 성공 |
 | USER_002 | 프로필 수정 성공 |
 | TARGET_001 | 보호 대상자 목록/상세 조회 성공 |
-| TARGET_002 | 보호 대상자 등록 성공 |
+| TARGET_002 | 보호 대상자 등록 성공(초대 승인 시점 포함, §8.5/§8.10 참고) |
+| TARGET_003 | 초대 코드 생성 성공 |
+| TARGET_004 | 승인 대기 목록 조회 성공 |
+| TARGET_005 | 연결 요청 접수 성공 (관계 생성 아님, 승인 대기 상태) |
+| TARGET_006 | 연결 요청 거절 처리 성공 |
 | LOCATION_001 | 위치 조회 성공 |
 | LOCATION_002 | 위치 전송 성공 |
 | PLACE_001 | 장소(안심구역) 등록/조회 성공 |
@@ -277,6 +281,10 @@ REST 관례상 HTTP Status와 Response Body의 `success`는 항상 일치해야 
 | TARGET_001 | 404 | 보호 대상자를 찾을 수 없음 |
 | TARGET_002 | 403 | 요청자와 매핑되지 않은 보호대상자 리소스 접근 (관계 미매핑) |
 | TARGET_003 | 409 | 이미 등록된 보호자-대상자 관계 |
+| TARGET_004 | 400 | 초대 코드가 유효하지 않거나 만료됨 (DATABASE_DESIGN_GUIDE.md §7, 토큰 유효기간 10분 또는 입력 실패 5회 초과로 폐기됨) |
+| TARGET_005 | 409 | CareTarget당 ACTIVE Guardian 정원(3명) 초과 (DATABASE_DESIGN_GUIDE.md §3.2/§7) |
+| TARGET_006 | 409 | 이미 대기 중인 동일 초대 요청이 존재함 |
+| TARGET_007 | 429 | 초대 코드 생성 요청 횟수 초과 (DATABASE_DESIGN_GUIDE.md §7, CareTarget 1인당 5회/일) — COMMON_005(AI/외부 API 보호용 Rate Limit)와 원인이 달라 별도 코드로 관리 |
 
 #### 위치 정보 (LOCATION)
 
@@ -418,6 +426,10 @@ public enum SuccessCode {
     USER_002("USER_002", "프로필 수정 성공"),
     TARGET_001("TARGET_001", "보호 대상자 목록/상세 조회 성공"),
     TARGET_002("TARGET_002", "보호 대상자 등록 성공"),
+    TARGET_003("TARGET_003", "초대 코드 생성 성공"),
+    TARGET_004("TARGET_004", "승인 대기 목록 조회 성공"),
+    TARGET_005("TARGET_005", "연결 요청 접수 성공"),
+    TARGET_006("TARGET_006", "연결 요청 거절 처리 성공"),
     LOCATION_001("LOCATION_001", "위치 조회 성공"),
     LOCATION_002("LOCATION_002", "위치 전송 성공"),
     PLACE_001("PLACE_001", "장소(안심구역) 등록/조회 성공"),
@@ -781,6 +793,8 @@ Flutter는 `roleSelected: false`를 보고 Role 선택 화면으로 이동시키
 ```
 
 ### 8.5 보호자 관리 — 보호 대상자 등록 (`POST /api/guardian/care-targets`)
+
+> **TODO(미반영)**: 이 예시는 Guardian 초대 흐름 변경 이전 버전(즉시 201 등록)이다. 새 흐름(코드 생성 → 승인 대기 접수 → 승인)에 맞게 다시 작성이 필요함 — `API_Specification.md` §3.1/§4.7(신설) 참고.
 
 **Request**
 ```json
