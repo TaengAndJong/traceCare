@@ -34,11 +34,16 @@ public enum ErrorCode {
     // Guardian
     GUARDIAN_001("GUARDIAN_001", HttpStatus.FORBIDDEN, "보호자만 접근할 수 있습니다"),
     GUARDIAN_002("GUARDIAN_002", HttpStatus.NOT_FOUND, "보호자 정보를 찾을 수 없습니다"),
+    GUARDIAN_003("GUARDIAN_003", HttpStatus.CONFLICT, "등록 가능한 보호대상자 수를 초과했습니다"),
 
     // Target
     TARGET_001("TARGET_001", HttpStatus.NOT_FOUND, "보호 대상자를 찾을 수 없습니다"),
     TARGET_002("TARGET_002", HttpStatus.FORBIDDEN, "접근 권한이 없는 보호대상자입니다"),
     TARGET_003("TARGET_003", HttpStatus.CONFLICT, "이미 등록된 보호대상자입니다"),
+    TARGET_004("TARGET_004", HttpStatus.BAD_REQUEST, "초대 코드가 유효하지 않거나 만료되었습니다"),
+    TARGET_005("TARGET_005", HttpStatus.CONFLICT, "보호자 등록 정원을 초과했습니다"),
+    TARGET_006("TARGET_006", HttpStatus.CONFLICT, "이미 대기 중인 연결 요청이 있습니다"),
+    TARGET_007("TARGET_007", HttpStatus.TOO_MANY_REQUESTS, "초대 코드 생성 횟수를 초과했습니다"),
 
     // Location
     LOCATION_001("LOCATION_001", HttpStatus.BAD_REQUEST, "위도/경도 값이 올바르지 않습니다"),

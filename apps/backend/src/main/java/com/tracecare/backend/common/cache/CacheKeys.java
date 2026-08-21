@@ -16,6 +16,10 @@ public final class CacheKeys {
     public static final String FCM_TOKEN = "fcm:token:";
     public static final String REFRESH = "refresh:";
     public static final String BLACKLIST = "blacklist:";
+    public static final String INVITE_TOKEN = "invite:token:";
+    public static final String INVITE_PENDING = "invite:pending:";
+    public static final String INVITE_COUNT = "invite:count:";
+    public static final String INVITE_FAIL = "invite:fail:";
 
     private CacheKeys() {}
 }

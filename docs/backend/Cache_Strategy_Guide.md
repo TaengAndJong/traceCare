@@ -117,8 +117,13 @@ Redis          PostgreSQL
 | FCM Token | `fcm:token:{userId}` | 없음(로그인/토큰 갱신 시 덮어씀) | 신규 발급 시 덮어쓰기 | **Redis** (최신 값만 필요) |
 | Refresh Token | `refresh:{userId}` | Refresh Token 만료 시간과 동일 | Rotation/로그아웃 시 삭제 | **Redis** (상세: Security_Guide.md 5.5) |
 | JWT Blacklist | `blacklist:{jti}` | 해당 Access Token의 남은 만료 시간 | TTL 자연 만료 | **Redis** (상세: Security_Guide.md 5.6~5.7) |
+| Guardian 초대 토큰 | `invite:token:{token}` | 10분 | CareTarget 승인/거절 시 즉시 삭제, 입력 실패 5회 초과 시 즉시 삭제 | **Redis** (DB에 별도 테이블 없음, DATABASE_DESIGN_GUIDE.md §3.2) |
+| Guardian 초대 대기 목록(역인덱스) | `invite:pending:{careTargetId}` (Hash, field=guardianId, value=token) | 없음(개별 field는 `invite:token:{token}` 만료 여부로 조회 시점에 지연 무효화) | 승인/거절 시 해당 field 삭제 | **Redis** (`invite:token:{token}`의 보조 색인, CareTarget이 대기 중인 요청 목록을 조회하기 위한 용도) |
+| 초대 코드 생성 Rate Limit 카운터 | `invite:count:{careTargetId}` | 당일 자정까지 | TTL 자연 만료 | **Redis** |
+| 초대 코드 입력 실패 카운터 | `invite:fail:{token}` | 10분(원본 토큰과 동일 수명) | 5회 도달 시 원본 토큰과 함께 즉시 삭제 | **Redis** |
 
 > `location:latest:{careTargetId}`처럼 API_Response_Rule.md 예시에서 `careTargetId`를 `public_id`(UUID)로 쓰기로 한 정책과 캐시 키 표기를 일치시켰다.
+> 초대 관련 4개 키는 `domain/guardian` Phase 1 구현 시 추가됐다. `invite:pending:{careTargetId}`는 DATABASE_DESIGN_GUIDE.md §3.2가 명시한 `invite:token:{token}` 단일 키만으로는 CareTarget이 "나에게 걸린 대기 요청 목록"을 조회할 방법이 없어(토큰 값을 모르므로 직접 조회 불가) 보조 색인으로 추가한 것이며, Source of Truth는 여전히 `invite:token:{token}`이다 — field별 TTL을 걸지 않고 조회/승인/거절 시점에 원본 토큰 존재 여부로 유효성을 재확인(지연 무효화)한다.
 
 ---
 

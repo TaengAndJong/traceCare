@@ -48,4 +48,20 @@ public class CacheKeyGenerator {
     public String blacklist(String jti) {
         return CacheKeys.BLACKLIST + jti;
     }
+
+    public String inviteToken(String token) {
+        return CacheKeys.INVITE_TOKEN + token;
+    }
+
+    public String invitePending(String careTargetId) {
+        return CacheKeys.INVITE_PENDING + careTargetId;
+    }
+
+    public String inviteCount(String careTargetId) {
+        return CacheKeys.INVITE_COUNT + careTargetId;
+    }
+
+    public String inviteFail(String token) {
+        return CacheKeys.INVITE_FAIL + token;
+    }
 }

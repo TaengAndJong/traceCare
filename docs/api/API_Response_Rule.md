@@ -135,6 +135,8 @@
 | TARGET_004 | 승인 대기 목록 조회 성공 |
 | TARGET_005 | 연결 요청 접수 성공 (관계 생성 아님, 승인 대기 상태) |
 | TARGET_006 | 연결 요청 거절 처리 성공 |
+| TARGET_008 | 관계 정보(relation/alias) 수정 성공 |
+| TARGET_009 | 관계 해제 성공 |
 | LOCATION_001 | 위치 조회 성공 |
 | LOCATION_002 | 위치 전송 성공 |
 | PLACE_001 | 장소(안심구역) 등록/조회 성공 |
@@ -273,6 +275,7 @@ REST 관례상 HTTP Status와 Response Body의 `success`는 항상 일치해야 
 |---|---|---|
 | GUARDIAN_001 | 403 | Guardian 권한이 아닌 사용자의 Guardian API 접근 |
 | GUARDIAN_002 | 404 | 보호자 정보를 찾을 수 없음 |
+| GUARDIAN_003 | 409 | Guardian 1인당 등록 가능 CareTarget 수(소프트 상한 10명, `DATABASE_DESIGN_GUIDE.md` §13/§14) 초과 |
 
 #### 보호대상자 (TARGET)
 
@@ -430,6 +433,8 @@ public enum SuccessCode {
     TARGET_004("TARGET_004", "승인 대기 목록 조회 성공"),
     TARGET_005("TARGET_005", "연결 요청 접수 성공"),
     TARGET_006("TARGET_006", "연결 요청 거절 처리 성공"),
+    TARGET_008("TARGET_008", "관계 정보(relation/alias) 수정 성공"),
+    TARGET_009("TARGET_009", "관계 해제 성공"),
     LOCATION_001("LOCATION_001", "위치 조회 성공"),
     LOCATION_002("LOCATION_002", "위치 전송 성공"),
     PLACE_001("PLACE_001", "장소(안심구역) 등록/조회 성공"),
@@ -792,28 +797,91 @@ Flutter는 `roleSelected: false`를 보고 Role 선택 화면으로 이동시키
 { "success": false, "code": "LOCATION_002", "message": "조회 가능한 위치 정보가 없습니다", "data": null }
 ```
 
-### 8.5 보호자 관리 — 보호 대상자 등록 (`POST /api/guardian/care-targets`)
+### 8.5 보호자 연결 — 초대 코드 생성 → 연결 요청 → 승인 대기 조회 → 승인
 
-> **TODO(미반영)**: 이 예시는 Guardian 초대 흐름 변경 이전 버전(즉시 201 등록)이다. 새 흐름(코드 생성 → 승인 대기 접수 → 승인)에 맞게 다시 작성이 필요함 — `API_Specification.md` §3.1/§4.7(신설) 참고.
+> 관계 생성은 직접 INSERT가 아니라 초대(Invitation)+CareTarget 승인 절차로만 이뤄진다(`DATABASE_DESIGN_GUIDE.md` §3.2/§7 확정, `API_Specification.md` §3.1/§4.7). 아래 4단계는 실제 구현(`GuardianInviteService`/`GuardianTargetService`)의 응답 형태를 그대로 옮긴 것이다 — 문서를 먼저 설계하지 않고 코드에 맞춰 재작성했다.
 
-**Request**
+**1) CareTarget: 초대 코드 생성 (`POST /api/care-target/guardians/invite-code`, 요청 본문 없음)**
+
+Success (200)
 ```json
-{ "careTargetUserId": "b2c3d4e5-f6a7-48b9-0c1d-2e3f4a5b6c7d", "relation": "자녀", "alias": "우리 아이" }
+{
+  "success": true,
+  "code": "TARGET_003",
+  "message": "초대 코드 생성 성공",
+  "data": { "inviteCode": "L74A5V5R", "expiresAt": "2026-08-06T08:42:10Z" }
+}
 ```
 
-**Success (201)**
+Error — 코드 생성 Rate Limit(5회/일) 초과 (429)
+```json
+{ "success": false, "code": "TARGET_007", "message": "초대 코드 생성 횟수를 초과했습니다", "data": null }
+```
+
+**2) Guardian: 코드 입력 → 연결 요청 (`POST /api/guardian/care-targets`)**
+
+Request
+```json
+{ "inviteCode": "L74A5V5R" }
+```
+
+Success (200) — 관계가 이 시점에 생성되는 것은 아니고, 승인 대기 상태로 접수될 뿐이다
+```json
+{
+  "success": true,
+  "code": "TARGET_005",
+  "message": "연결 요청 접수 성공",
+  "data": { "careTargetId": "3f2b1a10-9c4e-4a3b-8f2c-1d5e6a7b8c9d", "name": "김민준", "status": "PENDING" }
+}
+```
+
+Error — 코드가 유효하지 않거나 만료됨 (400)
+```json
+{ "success": false, "code": "TARGET_004", "message": "초대 코드가 유효하지 않거나 만료되었습니다", "data": null }
+```
+
+Error — 이미 같은 대상에게 대기 중인 요청이 있음 (409)
+```json
+{ "success": false, "code": "TARGET_006", "message": "이미 대기 중인 연결 요청이 있습니다", "data": null }
+```
+
+**3) CareTarget: 승인 대기 목록 조회 (`GET /api/care-target/guardians/pending`)**
+
+Success (200)
+```json
+{
+  "success": true,
+  "code": "TARGET_004",
+  "message": "승인 대기 목록 조회 성공",
+  "data": {
+    "content": [ { "guardianId": "9531018e-3f0a-4a6d-809e-0fbe3e4623b9", "name": "이수진" } ],
+    "page": 0,
+    "size": 1,
+    "totalElements": 1,
+    "totalPages": 1
+  }
+}
+```
+
+**4) CareTarget: 승인 (`POST /api/care-target/guardians/pending/{guardianId}/approve`, 요청 본문 없음)**
+
+`{guardianId}` = 위 대기 목록에 나타난 요청자 Guardian의 `public_id`(원본 초대 토큰이 아님).
+
+Success (200) — `GuardianTarget` 행이 이 시점에 실제로 생성되므로 §3.1의 등록 성공 코드(`TARGET_002`)를 재사용한다
 ```json
 {
   "success": true,
   "code": "TARGET_002",
   "message": "보호 대상자 등록 성공",
-  "data": { "careTargetId": "3f2b1a10-9c4e-4a3b-8f2c-1d5e6a7b8c9d", "name": "김민준", "relation": "자녀" }
+  "data": { "guardianId": "9531018e-3f0a-4a6d-809e-0fbe3e4623b9", "guardianRole": "PRIMARY", "relation": null, "alias": null }
 }
 ```
 
-**Error — 이미 등록된 관계 (409)**
+`relation`/`alias`는 승인 직후 항상 `null`이며, 이후 Guardian이 `PUT /api/guardian/care-targets/{id}`로 별도 설정한다.
+
+Error — CareTarget당 ACTIVE Guardian 정원(3명) 초과 (409)
 ```json
-{ "success": false, "code": "TARGET_003", "message": "이미 등록된 보호대상자입니다", "data": null }
+{ "success": false, "code": "TARGET_005", "message": "보호자 등록 정원을 초과했습니다", "data": null }
 ```
 
 ### 8.6 알림 전송 (내부 트리거 → FCM → 이력 저장 → Guardian 조회)

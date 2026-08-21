@@ -63,6 +63,7 @@ CREATE TABLE "GuardianTarget" (
     target_id       BIGINT NOT NULL,
     guardian_role   VARCHAR(10) NOT NULL DEFAULT 'SUB',
     relation        VARCHAR(50),
+    alias           VARCHAR(50),
     status          VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     terminated_at   TIMESTAMPTZ,
