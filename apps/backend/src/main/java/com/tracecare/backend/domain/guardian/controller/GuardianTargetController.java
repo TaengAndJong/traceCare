@@ -21,8 +21,10 @@ import com.tracecare.backend.common.security.SecurityUtils;
 import com.tracecare.backend.domain.caretarget.dto.response.InviteRedeemResponse;
 import com.tracecare.backend.domain.caretarget.service.GuardianInviteService;
 import com.tracecare.backend.domain.guardian.dto.request.InviteCodeRedeemRequest;
+import com.tracecare.backend.domain.guardian.dto.request.PrimaryDelegationRequest;
 import com.tracecare.backend.domain.guardian.dto.request.RelationUpdateRequest;
 import com.tracecare.backend.domain.guardian.dto.response.CareTargetResponse;
+import com.tracecare.backend.domain.guardian.dto.response.PrimaryDelegationResponse;
 import com.tracecare.backend.domain.guardian.service.GuardianTargetService;
 
 /**
@@ -84,5 +86,16 @@ public class GuardianTargetController {
     public ApiResponse<Void> terminateRelation(@PathVariable UUID id) {
         guardianTargetService.terminateRelation(SecurityUtils.getCurrentUserId(), id);
         return ApiResponse.success(SuccessCode.TARGET_009);
+    }
+
+    @PostMapping("/{id}/primary-delegation")
+    public ApiResponse<PrimaryDelegationResponse> delegatePrimary(
+            @PathVariable UUID id, @Valid @RequestBody PrimaryDelegationRequest request) {
+        return ApiResponse.success(
+                SuccessCode.TARGET_010,
+                guardianTargetService.delegatePrimary(
+                        SecurityUtils.getCurrentUserId(),
+                        id,
+                        UUID.fromString(request.getNewPrimaryGuardianId())));
     }
 }

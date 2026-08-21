@@ -137,6 +137,7 @@
 | TARGET_006 | 연결 요청 거절 처리 성공 |
 | TARGET_008 | 관계 정보(relation/alias) 수정 성공 |
 | TARGET_009 | 관계 해제 성공 |
+| TARGET_010 | PRIMARY 위임 성공 |
 | LOCATION_001 | 위치 조회 성공 |
 | LOCATION_002 | 위치 전송 성공 |
 | PLACE_001 | 장소(안심구역) 등록/조회 성공 |
@@ -276,6 +277,9 @@ REST 관례상 HTTP Status와 Response Body의 `success`는 항상 일치해야 
 | GUARDIAN_001 | 403 | Guardian 권한이 아닌 사용자의 Guardian API 접근 |
 | GUARDIAN_002 | 404 | 보호자 정보를 찾을 수 없음 |
 | GUARDIAN_003 | 409 | Guardian 1인당 등록 가능 CareTarget 수(소프트 상한 10명, `DATABASE_DESIGN_GUIDE.md` §13/§14) 초과 |
+| GUARDIAN_004 | 403 | PRIMARY 위임 요청을 SUB Guardian이 호출(호출자가 해당 CareTarget의 ACTIVE PRIMARY가 아님) |
+| GUARDIAN_005 | 403 | 위임 대상으로 지정한 Guardian이 해당 CareTarget의 ACTIVE SUB 상태가 아님(다른 CareTarget 소속이거나 PENDING/TERMINATED — Guardian 계정 자체가 존재하지 않는 경우는 `USER_001`을 그대로 씀, "존재 자체를 숨기려" 404로 대체하지 않는다는 기존 원칙과 동일하게 여기서도 "존재하지만 이 CareTarget과 무관/자격 없음"은 403으로 명확히 구분) |
+| GUARDIAN_006 | 409 | PRIMARY 위임 대상으로 자기 자신(호출자 본인)을 지정 |
 
 #### 보호대상자 (TARGET)
 
@@ -435,6 +439,7 @@ public enum SuccessCode {
     TARGET_006("TARGET_006", "연결 요청 거절 처리 성공"),
     TARGET_008("TARGET_008", "관계 정보(relation/alias) 수정 성공"),
     TARGET_009("TARGET_009", "관계 해제 성공"),
+    TARGET_010("TARGET_010", "PRIMARY 위임 성공"),
     LOCATION_001("LOCATION_001", "위치 조회 성공"),
     LOCATION_002("LOCATION_002", "위치 전송 성공"),
     PLACE_001("PLACE_001", "장소(안심구역) 등록/조회 성공"),

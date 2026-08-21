@@ -28,6 +28,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
+import com.tracecare.backend.common.exception.BusinessException;
 import com.tracecare.backend.common.exception.business.GuardianCapacityExceededException;
 import com.tracecare.backend.domain.auth.entity.User;
 import com.tracecare.backend.domain.auth.repository.UserRepository;
@@ -142,6 +143,81 @@ class GuardianTargetConcurrencyIntegrationTest {
                 guardianTargetRepository.countByTargetIdAndStatus(
                         target.getId(), GuardianTarget.STATUS_ACTIVE);
         assertThat(activeCount).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName(
+            "같은 PRIMARY가 서로 다른 SUB에게 동시에 위임을 시도해도 ACTIVE PRIMARY는 정확히 1명만 남는다"
+                    + "(uq_gt_primary_per_target 제약이 깨지지 않는다)")
+    void delegatePrimary_concurrentDelegations_neverViolatesPrimaryUniqueness() throws Exception {
+        // given
+        User target = createConfirmedUser("delegation-target-oauth-id", "CARE_TARGET");
+        User primaryGuardian = createConfirmedUser("delegation-primary-oauth-id", "GUARDIAN");
+        User subGuardianB = createConfirmedUser("delegation-sub-b-oauth-id", "GUARDIAN");
+        User subGuardianC = createConfirmedUser("delegation-sub-c-oauth-id", "GUARDIAN");
+
+        guardianTargetService.createRelation(primaryGuardian.getId(), target.getId());
+        guardianTargetService.createRelation(subGuardianB.getId(), target.getId());
+        guardianTargetService.createRelation(subGuardianC.getId(), target.getId());
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        CountDownLatch readyLatch = new CountDownLatch(2);
+        CountDownLatch startLatch = new CountDownLatch(1);
+
+        // when
+        Future<Boolean> delegateToB =
+                executor.submit(
+                        () ->
+                                attemptDelegation(
+                                        primaryGuardian.getId(),
+                                        target.getPublicId(),
+                                        subGuardianB.getPublicId(),
+                                        readyLatch,
+                                        startLatch));
+        Future<Boolean> delegateToC =
+                executor.submit(
+                        () ->
+                                attemptDelegation(
+                                        primaryGuardian.getId(),
+                                        target.getPublicId(),
+                                        subGuardianC.getPublicId(),
+                                        readyLatch,
+                                        startLatch));
+        readyLatch.await();
+        startLatch.countDown();
+
+        boolean succeededB = delegateToB.get(10, TimeUnit.SECONDS);
+        boolean succeededC = delegateToC.get(10, TimeUnit.SECONDS);
+        executor.shutdown();
+
+        // then — 둘 중 정확히 하나만 성공한다(락으로 직렬화되어, 늦게 락을 잡은 쪽은 호출자가 이미 SUB로 내려가 있어 거부됨)
+        assertThat(succeededB ^ succeededC).isTrue();
+        long activePrimaryCount =
+                guardianTargetRepository
+                        .findByTargetIdAndStatusAndGuardianRoleOrderByCreatedAtAsc(
+                                target.getId(),
+                                GuardianTarget.STATUS_ACTIVE,
+                                GuardianTarget.ROLE_PRIMARY)
+                        .size();
+        assertThat(activePrimaryCount).isEqualTo(1);
+    }
+
+    private boolean attemptDelegation(
+            Long callerId,
+            java.util.UUID targetPublicId,
+            java.util.UUID newPrimaryGuardianPublicId,
+            CountDownLatch readyLatch,
+            CountDownLatch startLatch)
+            throws InterruptedException {
+        readyLatch.countDown();
+        startLatch.await();
+        try {
+            guardianTargetService.delegatePrimary(
+                    callerId, targetPublicId, newPrimaryGuardianPublicId);
+            return true;
+        } catch (BusinessException e) {
+            return false;
+        }
     }
 
     private User createConfirmedUser(String oauthId, String role) {

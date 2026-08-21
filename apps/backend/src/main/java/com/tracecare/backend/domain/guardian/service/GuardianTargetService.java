@@ -2,14 +2,19 @@ package com.tracecare.backend.domain.guardian.service;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.tracecare.backend.common.exception.ErrorCode;
@@ -17,9 +22,15 @@ import com.tracecare.backend.common.exception.auth.AccessDeniedCustomException;
 import com.tracecare.backend.common.exception.business.CareTargetCapacityExceededException;
 import com.tracecare.backend.common.exception.business.CareTargetNotFoundException;
 import com.tracecare.backend.common.exception.business.GuardianCapacityExceededException;
+import com.tracecare.backend.common.exception.business.InvalidDelegationTargetException;
+import com.tracecare.backend.common.exception.business.NotPrimaryGuardianException;
+import com.tracecare.backend.common.exception.business.SelfDelegationException;
+import com.tracecare.backend.common.exception.business.UserNotFoundException;
+import com.tracecare.backend.common.exception.infra.DataAccessCustomException;
 import com.tracecare.backend.domain.auth.entity.User;
 import com.tracecare.backend.domain.auth.repository.UserRepository;
 import com.tracecare.backend.domain.guardian.dto.response.CareTargetResponse;
+import com.tracecare.backend.domain.guardian.dto.response.PrimaryDelegationResponse;
 import com.tracecare.backend.domain.guardian.entity.GuardianTarget;
 import com.tracecare.backend.domain.guardian.repository.GuardianTargetRepository;
 
@@ -30,6 +41,8 @@ import com.tracecare.backend.domain.guardian.repository.GuardianTargetRepository
  */
 @Service
 public class GuardianTargetService {
+
+    private static final Logger log = LoggerFactory.getLogger(GuardianTargetService.class);
 
     /** CareTarget 1명당 ACTIVE Guardian 최대 인원(DATABASE_DESIGN_GUIDE.md §3.2 확정 사항). */
     private static final int MAX_ACTIVE_GUARDIANS = 3;
@@ -136,6 +149,71 @@ public class GuardianTargetService {
                         guardianId, GuardianTarget.STATUS_ACTIVE);
         if (activeCount >= careTargetLimit) {
             throw new CareTargetCapacityExceededException();
+        }
+    }
+
+    /**
+     * POST /api/guardian/care-targets/{id}/primary-delegation — 호출자(현재 PRIMARY)가 살아있는 상태에서 같은
+     * CareTarget의 ACTIVE SUB에게 직접 대표 권한을 넘긴다(DATABASE_DESIGN_GUIDE.md §7 "대표(PRIMARY) 위임").
+     *
+     * <p>Isolation Level을 REPEATABLE READ로 지정하고, 두 UPDATE 전에 두 행을 각각 {@code
+     * findActiveByGuardianIdAndTargetIdForUpdate}로 잠근다(§7 동시성 절 그대로). 반드시 <b>기존 PRIMARY를 먼저 SUB로 내린
+     * 뒤</b> 대상을 PRIMARY로 올리는 순서를 지킨다 — 순서를 바꾸면 두 UPDATE 사이에 "같은 CareTarget에 ACTIVE PRIMARY가 2명"인
+     * 상태가 순간적으로 발생해 {@code uq_gt_primary_per_target} Partial Unique 제약을 즉시 위반한다. 먼저 내려놓으면 "0명"을 거쳐
+     * "1명"이 되므로 제약을 어기는 순간이 없다.
+     *
+     * <p>PostgreSQL REPEATABLE READ에서 {@code SELECT...FOR UPDATE}로 잠그려는 행이 대기 중에 다른 트랜잭션에 의해 실제로
+     * 변경·커밋되면(예: 같은 PRIMARY가 서로 다른 SUB에게 동시에 위임을 시도하는 경우) READ COMMITTED와 달리 최신값을 반환하지 않고 {@code
+     * could not serialize access due to concurrent update}로 즉시 실패한다 — 스냅샷 일관성을 지키기 위한 정상 동작이다. 이
+     * 경쟁에서 늦게 락을 잡은 트랜잭션은 재시도해야 하므로, {@link PessimisticLockingFailureException}(Spring이 변환한 공통 상위
+     * 타입)을 잡아 재시도 유도 메시지(`COMMON_001`)로 변환한다.
+     */
+    @Transactional(isolation = Isolation.REPEATABLE_READ)
+    public PrimaryDelegationResponse delegatePrimary(
+            Long callerId, UUID targetPublicId, UUID newPrimaryGuardianPublicId) {
+        User target = findTargetByPublicId(targetPublicId);
+
+        GuardianTarget callerRelation =
+                lockActiveRelation(callerId, target.getId())
+                        .orElseThrow(() -> new AccessDeniedCustomException(ErrorCode.TARGET_002));
+        if (!callerRelation.isPrimary()) {
+            throw new NotPrimaryGuardianException();
+        }
+
+        User newPrimaryGuardian =
+                userRepository
+                        .findByPublicId(newPrimaryGuardianPublicId)
+                        .orElseThrow(UserNotFoundException::new);
+        if (newPrimaryGuardian.getId().equals(callerId)) {
+            throw new SelfDelegationException();
+        }
+
+        GuardianTarget targetRelation =
+                lockActiveRelation(newPrimaryGuardian.getId(), target.getId())
+                        .filter(gt -> !gt.isPrimary())
+                        .orElseThrow(InvalidDelegationTargetException::new);
+
+        callerRelation.demoteToSub();
+        targetRelation.promoteToPrimary();
+
+        User caller = userRepository.findById(callerId).orElseThrow(UserNotFoundException::new);
+        return PrimaryDelegationResponse.builder()
+                .careTargetId(target.getPublicId().toString())
+                .previousPrimaryGuardianId(caller.getPublicId().toString())
+                .newPrimaryGuardianId(newPrimaryGuardian.getPublicId().toString())
+                .build();
+    }
+
+    private Optional<GuardianTarget> lockActiveRelation(Long guardianId, Long targetId) {
+        try {
+            return guardianTargetRepository.findActiveByGuardianIdAndTargetIdForUpdate(
+                    guardianId, targetId);
+        } catch (PessimisticLockingFailureException e) {
+            log.warn(
+                    "event=PRIMARY_DELEGATION_LOCK_CONFLICT, guardianId={}, targetId={}",
+                    guardianId,
+                    targetId);
+            throw new DataAccessCustomException(ErrorCode.COMMON_001);
         }
     }
 

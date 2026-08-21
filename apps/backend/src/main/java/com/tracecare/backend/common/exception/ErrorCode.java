@@ -35,6 +35,9 @@ public enum ErrorCode {
     GUARDIAN_001("GUARDIAN_001", HttpStatus.FORBIDDEN, "보호자만 접근할 수 있습니다"),
     GUARDIAN_002("GUARDIAN_002", HttpStatus.NOT_FOUND, "보호자 정보를 찾을 수 없습니다"),
     GUARDIAN_003("GUARDIAN_003", HttpStatus.CONFLICT, "등록 가능한 보호대상자 수를 초과했습니다"),
+    GUARDIAN_004("GUARDIAN_004", HttpStatus.FORBIDDEN, "대표(PRIMARY) 보호자만 가능합니다"),
+    GUARDIAN_005("GUARDIAN_005", HttpStatus.FORBIDDEN, "위임 대상이 활성 상태의 보조 보호자가 아닙니다"),
+    GUARDIAN_006("GUARDIAN_006", HttpStatus.CONFLICT, "본인을 위임 대상으로 지정할 수 없습니다"),
 
     // Target
     TARGET_001("TARGET_001", HttpStatus.NOT_FOUND, "보호 대상자를 찾을 수 없습니다"),

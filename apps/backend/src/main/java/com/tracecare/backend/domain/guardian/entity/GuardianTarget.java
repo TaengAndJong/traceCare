@@ -83,6 +83,10 @@ public class GuardianTarget {
         this.guardianRole = ROLE_PRIMARY;
     }
 
+    public void demoteToSub() {
+        this.guardianRole = ROLE_SUB;
+    }
+
     public void terminate() {
         this.status = STATUS_TERMINATED;
         this.terminatedAt = Instant.now();
