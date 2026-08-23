@@ -166,7 +166,7 @@ public class GuardianTargetService {
      * 변경·커밋되면(예: 같은 PRIMARY가 서로 다른 SUB에게 동시에 위임을 시도하는 경우) READ COMMITTED와 달리 최신값을 반환하지 않고 {@code
      * could not serialize access due to concurrent update}로 즉시 실패한다 — 스냅샷 일관성을 지키기 위한 정상 동작이다. 이
      * 경쟁에서 늦게 락을 잡은 트랜잭션은 재시도해야 하므로, {@link PessimisticLockingFailureException}(Spring이 변환한 공통 상위
-     * 타입)을 잡아 재시도 유도 메시지(`COMMON_001`)로 변환한다.
+     * 타입)을 잡아 재시도 유도 메시지(`COMMON_008`, 409 — 서버 오류가 아니라 동시 요청과의 정상적인 경합임을 명확히 구분)로 변환한다.
      */
     @Transactional(isolation = Isolation.REPEATABLE_READ)
     public PrimaryDelegationResponse delegatePrimary(
@@ -213,7 +213,7 @@ public class GuardianTargetService {
                     "event=PRIMARY_DELEGATION_LOCK_CONFLICT, guardianId={}, targetId={}",
                     guardianId,
                     targetId);
-            throw new DataAccessCustomException(ErrorCode.COMMON_001);
+            throw new DataAccessCustomException(ErrorCode.COMMON_008);
         }
     }
 

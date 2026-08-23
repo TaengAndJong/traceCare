@@ -249,6 +249,7 @@ REST 관례상 HTTP Status와 Response Body의 `success`는 항상 일치해야 
 | COMMON_005 | 429 | 요청 횟수 초과 (Rate Limit, AI/외부 API 보호용) |
 | COMMON_006 | 403 | 요청자의 Role로는 접근할 수 없는 API 호출 (Guardian API 이외의 Role 전용 API) |
 | COMMON_007 | 503 | Redis가 Source of Truth인 세션/보안 데이터(Refresh Token, JWT Blacklist) 접근 중 Redis 장애 발생 (Exception_Handling_Rule.md §10.4, 폴백 없이 명시적 실패 처리) |
+| COMMON_008 | 409 | 동시 요청과 충돌해 트랜잭션이 직렬화 실패함(`PessimisticLockingFailureException`) — 서버 오류가 아니라 정상적인 동시성 경합이므로 클라이언트가 잠시 후 재시도하면 해결됨. 특정 도메인에 국한되지 않고 `REPEATABLE READ` 격리 수준을 쓰는 트랜잭션 전반에서 재발할 수 있어 `COMMON` 도메인에 둠 |
 
 #### 인증 (AUTH)
 

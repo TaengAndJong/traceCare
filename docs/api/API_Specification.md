@@ -139,7 +139,7 @@
 
 **PRIMARY 위임**: 호출자가 해당 CareTarget의 ACTIVE PRIMARY가 아니면 거부한다. `newPrimaryGuardianId`는 같은 CareTarget에 대해 현재 ACTIVE SUB 상태여야 하며(다른 CareTarget 소속·PENDING·TERMINATED는 거부), 호출자 자신을 지정할 수 없다. 트랜잭션 순서 등 구현 세부는 `DATABASE_DESIGN_GUIDE.md` §7을 따른다.
 
-성공 코드: `TARGET_001`(목록/상세 조회) / `TARGET_005`(연결 요청 접수, §4.7 참고) / `TARGET_008`(관계 정보 수정) / `TARGET_009`(관계 해제) / `TARGET_010`(PRIMARY 위임) · 주요 실패 코드: `TARGET_001`(404, 대상 없음), `TARGET_002`(403, 관계 미매핑 리소스 접근), `TARGET_004`(400, 초대 코드 무효/만료), `TARGET_006`(409, 이미 대기 중인 동일 요청 존재), `GUARDIAN_003`(409, 코드 입력 시점 Guardian 1인당 CareTarget 등록 수 소프트 상한(10명) 초과, `DATABASE_DESIGN_GUIDE.md` §13/§14), `GUARDIAN_004`(403, 호출자가 PRIMARY 아님), `GUARDIAN_005`(403, 위임 대상이 ACTIVE SUB 아님), `GUARDIAN_006`(409, 자기 자신을 위임 대상으로 지정), `USER_001`(404, `newPrimaryGuardianId`가 존재하지 않는 사용자)
+성공 코드: `TARGET_001`(목록/상세 조회) / `TARGET_005`(연결 요청 접수, §4.7 참고) / `TARGET_008`(관계 정보 수정) / `TARGET_009`(관계 해제) / `TARGET_010`(PRIMARY 위임) · 주요 실패 코드: `TARGET_001`(404, 대상 없음), `TARGET_002`(403, 관계 미매핑 리소스 접근), `TARGET_004`(400, 초대 코드 무효/만료), `TARGET_006`(409, 이미 대기 중인 동일 요청 존재), `GUARDIAN_003`(409, 코드 입력 시점 Guardian 1인당 CareTarget 등록 수 소프트 상한(10명) 초과, `DATABASE_DESIGN_GUIDE.md` §13/§14), `GUARDIAN_004`(403, 호출자가 PRIMARY 아님), `GUARDIAN_005`(403, 위임 대상이 ACTIVE SUB 아님), `GUARDIAN_006`(409, 자기 자신을 위임 대상으로 지정), `USER_001`(404, `newPrimaryGuardianId`가 존재하지 않는 사용자), `COMMON_008`(409, PRIMARY 위임 동시 요청 충돌 — 재시도 필요)
 
 ### 3.2 장소(안심구역) 관리
 

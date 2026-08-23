@@ -16,6 +16,7 @@ public enum ErrorCode {
     COMMON_006("COMMON_006", HttpStatus.FORBIDDEN, "요청자의 권한으로는 접근할 수 없는 API입니다"),
     COMMON_007(
             "COMMON_007", HttpStatus.SERVICE_UNAVAILABLE, "일시적으로 서비스를 이용할 수 없습니다. 잠시 후 다시 시도해주세요"),
+    COMMON_008("COMMON_008", HttpStatus.CONFLICT, "다른 요청과 충돌했습니다. 잠시 후 다시 시도해주세요"),
 
     // Auth
     AUTH_001("AUTH_001", HttpStatus.UNAUTHORIZED, "인증이 필요합니다"),

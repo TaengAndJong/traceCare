@@ -10,6 +10,7 @@ import java.sql.Statement;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -29,6 +30,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
 import com.tracecare.backend.common.exception.BusinessException;
+import com.tracecare.backend.common.exception.ErrorCode;
 import com.tracecare.backend.common.exception.business.GuardianCapacityExceededException;
 import com.tracecare.backend.domain.auth.entity.User;
 import com.tracecare.backend.domain.auth.repository.UserRepository;
@@ -165,7 +167,7 @@ class GuardianTargetConcurrencyIntegrationTest {
         CountDownLatch startLatch = new CountDownLatch(1);
 
         // when
-        Future<Boolean> delegateToB =
+        Future<ErrorCode> delegateToB =
                 executor.submit(
                         () ->
                                 attemptDelegation(
@@ -174,7 +176,7 @@ class GuardianTargetConcurrencyIntegrationTest {
                                         subGuardianB.getPublicId(),
                                         readyLatch,
                                         startLatch));
-        Future<Boolean> delegateToC =
+        Future<ErrorCode> delegateToC =
                 executor.submit(
                         () ->
                                 attemptDelegation(
@@ -186,12 +188,19 @@ class GuardianTargetConcurrencyIntegrationTest {
         readyLatch.await();
         startLatch.countDown();
 
-        boolean succeededB = delegateToB.get(10, TimeUnit.SECONDS);
-        boolean succeededC = delegateToC.get(10, TimeUnit.SECONDS);
+        ErrorCode resultB = delegateToB.get(10, TimeUnit.SECONDS);
+        ErrorCode resultC = delegateToC.get(10, TimeUnit.SECONDS);
         executor.shutdown();
 
-        // then — 둘 중 정확히 하나만 성공한다(락으로 직렬화되어, 늦게 락을 잡은 쪽은 호출자가 이미 SUB로 내려가 있어 거부됨)
+        // then — 둘 중 정확히 하나만 성공(null)하고, 늦게 락을 잡은 쪽은 PostgreSQL REPEATABLE READ의 직렬화 실패를
+        // 재시도 유도 코드(COMMON_008, 409)로 변환받아 실패한다(호출자가 이미 SUB로 내려가 있어 GUARDIAN_004로 거부되는 게
+        // 아니라, 락 획득 자체가 직렬화 실패로 끝난다 — GuardianTargetService.lockActiveRelation 참고)
+        boolean succeededB = resultB == null;
+        boolean succeededC = resultC == null;
         assertThat(succeededB ^ succeededC).isTrue();
+        ErrorCode failureCode = succeededB ? resultC : resultB;
+        assertThat(failureCode).isEqualTo(ErrorCode.COMMON_008);
+
         long activePrimaryCount =
                 guardianTargetRepository
                         .findByTargetIdAndStatusAndGuardianRoleOrderByCreatedAtAsc(
@@ -202,10 +211,11 @@ class GuardianTargetConcurrencyIntegrationTest {
         assertThat(activePrimaryCount).isEqualTo(1);
     }
 
-    private boolean attemptDelegation(
+    /** 성공하면 {@code null}, 실패하면 던져진 {@link BusinessException}의 {@link ErrorCode}를 반환한다. */
+    private ErrorCode attemptDelegation(
             Long callerId,
-            java.util.UUID targetPublicId,
-            java.util.UUID newPrimaryGuardianPublicId,
+            UUID targetPublicId,
+            UUID newPrimaryGuardianPublicId,
             CountDownLatch readyLatch,
             CountDownLatch startLatch)
             throws InterruptedException {
@@ -214,9 +224,9 @@ class GuardianTargetConcurrencyIntegrationTest {
         try {
             guardianTargetService.delegatePrimary(
                     callerId, targetPublicId, newPrimaryGuardianPublicId);
-            return true;
+            return null;
         } catch (BusinessException e) {
-            return false;
+            return e.getErrorCode();
         }
     }
 
