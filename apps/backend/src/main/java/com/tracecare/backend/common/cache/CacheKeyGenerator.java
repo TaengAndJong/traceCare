@@ -13,8 +13,9 @@ public class CacheKeyGenerator {
         return CacheKeys.LOCATION_LATEST + careTargetId;
     }
 
-    public String placeList(String guardianId) {
-        return CacheKeys.PLACE_LIST + guardianId;
+    /** Cache_Strategy_Guide.md §3.2(2026-08 수정) — Place 목록 조회가 CareTarget 기준이므로 targetId를 쓴다. */
+    public String placeList(String targetId) {
+        return CacheKeys.PLACE_LIST + targetId;
     }
 
     public String userInfo(String userId) {

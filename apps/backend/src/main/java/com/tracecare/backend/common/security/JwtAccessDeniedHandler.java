@@ -23,12 +23,16 @@ import com.tracecare.backend.common.response.ApiResponse;
  *
  * <p>Guardian API(`/api/guardian/**`)에 대한 Role 불일치는 API_Specification.md에 명시된 대로 GUARDIAN_001을 그대로
  * 쓰고, 그 외 Role 전용 URL(`/api/care-target/**` 등)에 대한 Role 불일치는 도메인별 코드가 문서에 없으므로 범용 코드 COMMON_006을
- * 쓴다(API_Response_Rule.md §5.2).
+ * 쓴다(API_Response_Rule.md §5.2). 단, `/api/care-target/location`(§4.1)과
+ * `/api/care-target/share/location`(§4.3)은 API_Specification.md가 각각 LOCATION_003/LOCATION_004를 Role
+ * 불일치 코드로 명시하고 있어 GUARDIAN_001과 동일한 방식으로 경로별 예외 처리를 추가했다(domain/location 세션에서 반영, 2026-08).
  */
 @Component
 public class JwtAccessDeniedHandler implements AccessDeniedHandler {
 
     private static final String GUARDIAN_PATH_PREFIX = "/api/guardian/";
+    private static final String CARE_TARGET_LOCATION_SEND_PATH = "/api/care-target/location";
+    private static final String CARE_TARGET_LOCATION_SHARE_PATH = "/api/care-target/share/location";
 
     private static final Logger log = LoggerFactory.getLogger(JwtAccessDeniedHandler.class);
 
@@ -54,8 +58,17 @@ public class JwtAccessDeniedHandler implements AccessDeniedHandler {
     }
 
     private ErrorCode resolveErrorCode(String uri) {
-        if (uri != null && uri.startsWith(GUARDIAN_PATH_PREFIX)) {
+        if (uri == null) {
+            return ErrorCode.COMMON_006;
+        }
+        if (uri.startsWith(GUARDIAN_PATH_PREFIX)) {
             return ErrorCode.GUARDIAN_001;
+        }
+        if (uri.equals(CARE_TARGET_LOCATION_SEND_PATH)) {
+            return ErrorCode.LOCATION_003;
+        }
+        if (uri.equals(CARE_TARGET_LOCATION_SHARE_PATH)) {
+            return ErrorCode.LOCATION_004;
         }
         return ErrorCode.COMMON_006;
     }

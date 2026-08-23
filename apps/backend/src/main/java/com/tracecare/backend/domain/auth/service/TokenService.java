@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.serializer.SerializationException;
 import org.springframework.stereotype.Service;
 
 import com.tracecare.backend.common.cache.CacheKeyGenerator;
@@ -130,7 +131,7 @@ public class TokenService {
     private Object redisGet(String key) {
         try {
             return redisTemplate.opsForValue().get(key);
-        } catch (DataAccessException e) {
+        } catch (DataAccessException | SerializationException e) {
             log.error("event=REDIS_UNAVAILABLE, operation=GET", e);
             throw new DataAccessCustomException(ErrorCode.COMMON_007);
         }
@@ -139,7 +140,7 @@ public class TokenService {
     private void redisSet(String key, Object value, Duration ttl) {
         try {
             redisTemplate.opsForValue().set(key, value, ttl);
-        } catch (DataAccessException e) {
+        } catch (DataAccessException | SerializationException e) {
             log.error("event=REDIS_UNAVAILABLE, operation=SET", e);
             throw new DataAccessCustomException(ErrorCode.COMMON_007);
         }
@@ -148,7 +149,7 @@ public class TokenService {
     private void redisDelete(String key) {
         try {
             redisTemplate.delete(key);
-        } catch (DataAccessException e) {
+        } catch (DataAccessException | SerializationException e) {
             log.error("event=REDIS_UNAVAILABLE, operation=DELETE", e);
             throw new DataAccessCustomException(ErrorCode.COMMON_007);
         }

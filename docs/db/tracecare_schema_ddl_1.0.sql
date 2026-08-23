@@ -83,6 +83,7 @@ CREATE TABLE "Place" (
     id              BIGINT GENERATED ALWAYS AS IDENTITY,
     public_id       UUID NOT NULL DEFAULT gen_random_uuid(),
     user_id         BIGINT NOT NULL,
+    target_id       BIGINT NOT NULL,
     name            VARCHAR(150) NOT NULL,
     address         TEXT,
     latitude        NUMERIC(10, 7) NOT NULL,
@@ -100,7 +101,7 @@ CREATE TABLE "Place" (
     CONSTRAINT ck_place_radius CHECK (radius > 0)
 );
 
-COMMENT ON TABLE "Place" IS 'Guardian이 등록하는 GeoFence(안심구역). 등록·수정·삭제는 ACTIVE PRIMARY Guardian만 가능(애플리케이션/Service 계층 검증, §3.3)';
+COMMENT ON TABLE "Place" IS 'Guardian이 등록하는 GeoFence(안심구역). 등록·수정·삭제는 ACTIVE PRIMARY Guardian만 가능(애플리케이션/Service 계층 검증, §3.3). target_id는 이 장소가 속한 CareTarget(User) 참조 — DB 설계 당시 누락분 보완(다중 CareTarget 관리 시 장소를 구분하기 위해 필요, 2026-08 결정)';
 
 -- ---------------------------------------------------------------------
 -- 02-4. LocationHistory (Time-Series, 파티셔닝 필수) — CareTarget GPS 원본 위치
@@ -279,10 +280,14 @@ ALTER TABLE "GuardianTarget"
         REFERENCES "User" (id) ON DELETE CASCADE ON UPDATE NO ACTION;
 
 -- ---------------------------------------------------------------------
--- Place → User (user_id)
+-- Place → User (user_id, target_id)
 -- ---------------------------------------------------------------------
 ALTER TABLE "Place"
     ADD CONSTRAINT fk_place_user FOREIGN KEY (user_id)
+        REFERENCES "User" (id) ON DELETE CASCADE ON UPDATE NO ACTION;
+
+ALTER TABLE "Place"
+    ADD CONSTRAINT fk_place_target FOREIGN KEY (target_id)
         REFERENCES "User" (id) ON DELETE CASCADE ON UPDATE NO ACTION;
 
 -- ---------------------------------------------------------------------
@@ -379,6 +384,10 @@ CREATE UNIQUE INDEX uq_gt_primary_per_target
 -- 동일 이름의 인덱스를 생성하므로 별도 CREATE INDEX 불필요(User의 uk_user_public_id와 동일 패턴).
 CREATE INDEX idx_place_user
     ON "Place" (user_id)
+    WHERE deleted_at IS NULL;
+
+CREATE INDEX idx_place_target
+    ON "Place" (target_id)
     WHERE deleted_at IS NULL;
 
 -- ---------------------------------------------------------------------

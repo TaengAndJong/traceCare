@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.serializer.SerializationException;
 import org.springframework.stereotype.Service;
 
 import com.tracecare.backend.common.cache.CacheKeyGenerator;
@@ -311,7 +312,7 @@ public class GuardianInviteService {
     private Object redisGet(String key) {
         try {
             return redisTemplate.opsForValue().get(key);
-        } catch (DataAccessException e) {
+        } catch (DataAccessException | SerializationException e) {
             log.error("event=REDIS_UNAVAILABLE, operation=GET", e);
             throw new DataAccessCustomException(ErrorCode.COMMON_007);
         }
@@ -320,7 +321,7 @@ public class GuardianInviteService {
     private void redisSet(String key, Object value, Duration ttl) {
         try {
             redisTemplate.opsForValue().set(key, value, ttl);
-        } catch (DataAccessException e) {
+        } catch (DataAccessException | SerializationException e) {
             log.error("event=REDIS_UNAVAILABLE, operation=SET", e);
             throw new DataAccessCustomException(ErrorCode.COMMON_007);
         }
@@ -329,7 +330,7 @@ public class GuardianInviteService {
     private void redisDelete(String key) {
         try {
             redisTemplate.delete(key);
-        } catch (DataAccessException e) {
+        } catch (DataAccessException | SerializationException e) {
             log.error("event=REDIS_UNAVAILABLE, operation=DELETE", e);
             throw new DataAccessCustomException(ErrorCode.COMMON_007);
         }
@@ -338,7 +339,7 @@ public class GuardianInviteService {
     private boolean redisHasKey(String key) {
         try {
             return Boolean.TRUE.equals(redisTemplate.hasKey(key));
-        } catch (DataAccessException e) {
+        } catch (DataAccessException | SerializationException e) {
             log.error("event=REDIS_UNAVAILABLE, operation=HAS_KEY", e);
             throw new DataAccessCustomException(ErrorCode.COMMON_007);
         }
@@ -347,7 +348,7 @@ public class GuardianInviteService {
     private Long redisIncrement(String key) {
         try {
             return redisTemplate.opsForValue().increment(key);
-        } catch (DataAccessException e) {
+        } catch (DataAccessException | SerializationException e) {
             log.error("event=REDIS_UNAVAILABLE, operation=INCREMENT", e);
             throw new DataAccessCustomException(ErrorCode.COMMON_007);
         }
@@ -356,7 +357,7 @@ public class GuardianInviteService {
     private void redisExpire(String key, Duration ttl) {
         try {
             redisTemplate.expire(key, ttl);
-        } catch (DataAccessException e) {
+        } catch (DataAccessException | SerializationException e) {
             log.error("event=REDIS_UNAVAILABLE, operation=EXPIRE", e);
             throw new DataAccessCustomException(ErrorCode.COMMON_007);
         }
@@ -370,7 +371,7 @@ public class GuardianInviteService {
             HashOperations<String, Object, Object> ops, String key, Object hashKey) {
         try {
             return ops.hasKey(key, hashKey);
-        } catch (DataAccessException e) {
+        } catch (DataAccessException | SerializationException e) {
             log.error("event=REDIS_UNAVAILABLE, operation=HASH_HAS_KEY", e);
             throw new DataAccessCustomException(ErrorCode.COMMON_007);
         }
@@ -380,7 +381,7 @@ public class GuardianInviteService {
             HashOperations<String, Object, Object> ops, String key, Object hashKey, Object value) {
         try {
             ops.put(key, hashKey, value);
-        } catch (DataAccessException e) {
+        } catch (DataAccessException | SerializationException e) {
             log.error("event=REDIS_UNAVAILABLE, operation=HASH_PUT", e);
             throw new DataAccessCustomException(ErrorCode.COMMON_007);
         }
@@ -389,7 +390,7 @@ public class GuardianInviteService {
     private Object redisHashGet(String key, Object hashKey) {
         try {
             return redisHashOps().get(key, hashKey);
-        } catch (DataAccessException e) {
+        } catch (DataAccessException | SerializationException e) {
             log.error("event=REDIS_UNAVAILABLE, operation=HASH_GET", e);
             throw new DataAccessCustomException(ErrorCode.COMMON_007);
         }
@@ -398,7 +399,7 @@ public class GuardianInviteService {
     private Map<Object, Object> redisHashEntries(String key) {
         try {
             return redisHashOps().entries(key);
-        } catch (DataAccessException e) {
+        } catch (DataAccessException | SerializationException e) {
             log.error("event=REDIS_UNAVAILABLE, operation=HASH_ENTRIES", e);
             throw new DataAccessCustomException(ErrorCode.COMMON_007);
         }
@@ -407,7 +408,7 @@ public class GuardianInviteService {
     private void redisHashDelete(String key, Object hashKey) {
         try {
             redisHashOps().delete(key, hashKey);
-        } catch (DataAccessException e) {
+        } catch (DataAccessException | SerializationException e) {
             log.error("event=REDIS_UNAVAILABLE, operation=HASH_DELETE", e);
             throw new DataAccessCustomException(ErrorCode.COMMON_007);
         }

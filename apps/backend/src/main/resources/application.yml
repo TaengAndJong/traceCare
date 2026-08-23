@@ -38,5 +38,11 @@ guardian:
   # DATABASE_DESIGN_GUIDE.md §13/§14 확정: 하드 상한 없음, 애플리케이션 소프트 상한(설정값 관리)
   care-target-limit: ${GUARDIAN_CARE_TARGET_LIMIT:10}
 
+place:
+  # DATABASE_DESIGN_GUIDE.md §13/§14 확정: 하드 상한 없음, 애플리케이션 소프트 상한(설정값 관리)
+  care-target-limit: ${PLACE_CARE_TARGET_LIMIT:15}
+  # 중복 등록 판정 반경(m) — Haversine 실거리 기준, GPS 오차를 고려해 정확히 같은 좌표가 아니어도 중복으로 판단(2026-08 확정)
+  duplicate-distance-meters: ${PLACE_DUPLICATE_DISTANCE_METERS:50}
+
 server:
   port: ${SERVER_PORT:8080}

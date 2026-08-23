@@ -141,6 +141,8 @@
 | LOCATION_001 | 위치 조회 성공 |
 | LOCATION_002 | 위치 전송 성공 |
 | PLACE_001 | 장소(안심구역) 등록/조회 성공 |
+| PLACE_002 | 장소(안심구역) 수정 성공 |
+| PLACE_003 | 장소(안심구역) 삭제 성공 |
 | NOTI_001 | 알림 조회 성공 |
 | NOTI_002 | 알림 읽음 처리 성공 |
 | AI_001 | AI 응답 생성 성공 |
@@ -278,7 +280,7 @@ REST 관례상 HTTP Status와 Response Body의 `success`는 항상 일치해야 
 | GUARDIAN_001 | 403 | Guardian 권한이 아닌 사용자의 Guardian API 접근 |
 | GUARDIAN_002 | 404 | 보호자 정보를 찾을 수 없음 |
 | GUARDIAN_003 | 409 | Guardian 1인당 등록 가능 CareTarget 수(소프트 상한 10명, `DATABASE_DESIGN_GUIDE.md` §13/§14) 초과 |
-| GUARDIAN_004 | 403 | PRIMARY 위임 요청을 SUB Guardian이 호출(호출자가 해당 CareTarget의 ACTIVE PRIMARY가 아님) |
+| GUARDIAN_004 | 403 | 호출자가 해당 CareTarget의 ACTIVE PRIMARY Guardian이 아님(PRIMARY 전용 액션에 SUB가 접근) — PRIMARY 위임(§3.1), Place 등록·수정·삭제(§3.2)에서 공통 재사용 |
 | GUARDIAN_005 | 403 | 위임 대상으로 지정한 Guardian이 해당 CareTarget의 ACTIVE SUB 상태가 아님(다른 CareTarget 소속이거나 PENDING/TERMINATED — Guardian 계정 자체가 존재하지 않는 경우는 `USER_001`을 그대로 씀, "존재 자체를 숨기려" 404로 대체하지 않는다는 기존 원칙과 동일하게 여기서도 "존재하지만 이 CareTarget과 무관/자격 없음"은 403으로 명확히 구분) |
 | GUARDIAN_006 | 409 | PRIMARY 위임 대상으로 자기 자신(호출자 본인)을 지정 |
 
@@ -308,8 +310,9 @@ REST 관례상 HTTP Status와 Response Body의 `success`는 항상 일치해야 
 | code | HTTP Status | 상황 |
 |---|---|---|
 | PLACE_001 | 404 | 등록된 장소(안심구역)를 찾을 수 없음 |
-| PLACE_002 | 409 | 동일 좌표/이름의 장소 중복 등록 |
+| PLACE_002 | 409 | 동일 CareTarget 내 이름이 같거나, 실제 거리(Haversine)가 `place.duplicate-distance-meters`(기본 50m) 이내인 장소 중복 등록 — 좌표는 정확히 같지 않아도 반경 50m 이내면 동일 장소로 판단(GPS 오차 감안, 2026-08 확정, 실내/도심 GPS 오차가 10~30m를 넘기도 해 30m에서 50m로 완화) |
 | PLACE_003 | 400 | GeoFence 반경 값이 유효 범위를 벗어남 |
+| PLACE_004 | 409 | CareTarget 1인당 Place 등록 수(소프트 상한 15개, `DATABASE_DESIGN_GUIDE.md` §13/§14) 초과 |
 
 #### 알림 (NOTI)
 
@@ -444,6 +447,8 @@ public enum SuccessCode {
     LOCATION_001("LOCATION_001", "위치 조회 성공"),
     LOCATION_002("LOCATION_002", "위치 전송 성공"),
     PLACE_001("PLACE_001", "장소(안심구역) 등록/조회 성공"),
+    PLACE_002("PLACE_002", "장소(안심구역) 수정 성공"),
+    PLACE_003("PLACE_003", "장소(안심구역) 삭제 성공"),
     NOTI_001("NOTI_001", "알림 조회 성공"),
     NOTI_002("NOTI_002", "알림 읽음 처리 성공"),
     AI_001("AI_001", "AI 응답 생성 성공");

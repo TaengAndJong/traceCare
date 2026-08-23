@@ -109,6 +109,7 @@ Role 컬럼으로 구분하는 Single Table 설계를 유지한다. Guardian과 
 
 - **주요 변경**: 위경도/반경 CHECK 제약 추가, Soft Delete, 낙관적 락(version) 추가.
 - **권한 정책 반영**: Place의 등록(CREATE)·수정(UPDATE)·삭제(DELETE)는 해당 CareTarget의 ACTIVE PRIMARY Guardian만 수행할 수 있다. SUB Guardian은 조회만 가능하다. 이는 여러 보호자가 동시에 안심구역을 편집하면서 발생하는 데이터 충돌을 구조적으로 차단하기 위한 결정이다.
+- **누락분 보완(2026-08)**: `target_id`(CareTarget인 User 참조) 컬럼 추가. 원래 §3.3의 권한 정책 문구 자체가 "해당 CareTarget의 ACTIVE PRIMARY Guardian"을 전제하고 있었음에도 DDL에는 이 장소가 어느 CareTarget 소속인지 가리키는 컬럼이 없었다 — 한 Guardian이 여러 CareTarget을 관리할 수 있는 구조(Guardian 1인당 CareTarget 상한 10명)를 고려하면 설계 당시 누락이 맞다(사용자 확인 완료). `user_id`(등록한 Guardian)는 그대로 유지하고 `target_id`(소속 CareTarget)를 병행한다.
 
 ### 3.4 LocationHistory — CareTarget GPS 원본 위치 (프로젝트에서 가장 빠르게 증가하는 테이블)
 
@@ -185,6 +186,7 @@ AI 예측(Feature Engineering)의 입력 데이터로 사용된다. place_name�
 | id | BIGINT (IDENTITY) | NOT NULL | — | PK |
 | public_id | UUID | NOT NULL | gen_random_uuid() | 외부 노출용 식별자 (URL/API 응답) — §8 결정 반영, IDOR 방지 |
 | user_id | BIGINT | NOT NULL | — | User(보호자, 등록 시점 기준 ACTIVE PRIMARY Guardian) 참조 |
+| target_id | BIGINT | NOT NULL | — | User(이 장소가 속한 CareTarget) 참조 — 누락분 보완(다중 CareTarget 관리 시 장소를 구분하기 위해 필요, 2026-08) |
 | name | VARCHAR(150) | NOT NULL | — | 장소명 |
 | address | TEXT | NULL | — | 주소 |
 | latitude | NUMERIC(10,7) | NOT NULL | — | 위도 |
@@ -276,7 +278,7 @@ target_id·is_retry 추가는 새로운 결정이 아니라 원 기획서에 이
 |---|---|---|---|
 | User | id | — | — |
 | GuardianTarget | id | guardian_id, target_id | User(id), User(id) |
-| Place | id | user_id | User(id) |
+| Place | id | user_id, target_id | User(id), User(id) |
 | LocationHistory | (id, recorded_at) — 복합 | user_id | User(id) |
 | VisitHistory | id | user_id, place_id | User(id), Place(id) |
 | PredictionHistory | id | user_id | User(id) |
@@ -361,6 +363,7 @@ GuardianTarget 카디널리티 및 Place 등록 권한 범위는 이전 [결정 
 | Place | UNIQUE | public_id | — (User와 동일 패턴, §8 결정 반영) |
 | Place | 문서화 (DB 제약 아님) | 등록(INSERT)·수정(UPDATE)·삭제(DELETE)는 요청자가 해당 CareTarget의 ACTIVE PRIMARY Guardian인 경우에만 허용 | Guardian의 role은 GuardianTarget 테이블 값이므로 Place 테이블 자체 CHECK로 표현 불가한 교차 테이블 규칙 → Service 계층 책임 (Exception Handling Rule 7장 Business Exception) |
 | Place | 문서화 (DB 제약 아님, 최종 확정) | CareTarget 1인당 Place 등록 수 상한 | 하드 상한 없음, 애플리케이션 소프트 상한 15개 적용 (설정값으로 관리). 가이드의 평균 추정치(3~5개)의 약 3배 여유. GuardianTarget 정원 처리와 동일 원칙 (DB 제약 대신 애플리케이션 카운트 검증) 적용 |
+| Place | 문서화 (DB 제약 아님, 최종 확정, 2026-08) | 동일 CareTarget 내 중복 등록 판정 기준 | 이름이 정확히 같거나, 두 좌표 간 실제 거리(Haversine 공식)가 `place.duplicate-distance-meters`(기본 50m) 이내면 중복(PLACE_002)으로 판단. 모바일 GPS는 같은 장소를 다시 등록해도 좌표가 미세하게 달라지는 것이 일반적이라 "좌표 완전 일치"는 비현실적 — 위도에 따라 경도 1도의 실거리가 달라지므로 단순 좌표 차이 비교가 아닌 구면 거리 계산이 필요해 DB CHECK/UNIQUE로 표현 불가, Service 계층(애플리케이션)에서 판단. 최초 30m로 확정했으나 실내/도심 GPS 오차가 10~30m를 넘기도 하는 점을 감안해 50m로 완화(2026-08) |
 | LocationHistory | CHECK | latitude/longitude 범위 | — |
 | VisitHistory | CHECK | departure_time >= arrival_time (또는 NULL) | — |
 | VisitHistory | CHECK | stay_minutes >= 0 (또는 NULL) | — |
@@ -377,7 +380,8 @@ GuardianTarget 카디널리티 및 Place 등록 권한 범위는 이전 [결정 
 | FK | ON DELETE | ON UPDATE | 근거 |
 |---|---|---|---|
 | GuardianTarget → User | CASCADE | NO ACTION | 관계 데이터 양이 적어 부담 낮음. User는 Soft Delete가 기본이므로 실제 CASCADE는 완전 파기(Hard Delete) 시점에만 발동 |
-| Place → User | CASCADE | NO ACTION | 동일 이유, 데이터량 적음 |
+| Place → User(등록한 Guardian, user_id) | CASCADE | NO ACTION | 동일 이유, 데이터량 적음 |
+| Place → User(소속 CareTarget, target_id) | CASCADE | NO ACTION | 동일 이유. target_id는 누락분 보완으로 신규 추가된 컬럼(2026-08) |
 | LocationHistory → User | RESTRICT | NO ACTION | 수억 건 자식 행 동기 CASCADE 시 장시간 락 발생 → 비동기 배치(파티션 DROP/익명화)로 처리 |
 | VisitHistory → User | RESTRICT | NO ACTION | 위와 동일 |
 | VisitHistory → Place | SET NULL | NO ACTION | 원본 장소가 삭제돼도 place_name 스냅샷으로 이력은 유지 |
@@ -421,7 +425,8 @@ GuardianTarget 카디널리티 및 Place 등록 권한 범위는 이전 [결정 
 | GuardianTarget | idx_gt_target_role (기존 idx_gt_target 대체) | (target_id, guardian_role) | Composite B-Tree | 보호대상자의 보호자 목록 조회 + 정원 카운트 조회·PRIMARY 조회를 하나의 인덱스로 커버 |
 | GuardianTarget | uq_gt_active_pair | (guardian_id, target_id) WHERE status='ACTIVE' | Partial UNIQUE | 활성 관계 중복 방지 |
 | GuardianTarget | uq_gt_primary_per_target | (target_id) WHERE guardian_role='PRIMARY' AND status='ACTIVE' | Partial UNIQUE | 대표 유일성 강제 겸 대표 조회용 인덱스 |
-| Place | idx_place_user | user_id | Partial (WHERE deleted_at IS NULL) | 장소 목록 조회 |
+| Place | idx_place_user | user_id | Partial (WHERE deleted_at IS NULL) | 등록한 Guardian 기준 조회 |
+| Place | idx_place_target | target_id | Partial (WHERE deleted_at IS NULL) | 소속 CareTarget 기준 장소 목록 조회(주 조회 경로, `place:list:{targetId}` 캐시 미스 시) |
 | LocationHistory | idx_lh_user_recorded | (user_id, recorded_at DESC) | Composite B-Tree | 최신 위치/기간별 이력 조회 (파티션별 로컬 인덱스 자동 생성) |
 | VisitHistory | idx_vh_user_arrival | (user_id, arrival_time DESC) | Composite B-Tree | 방문 이력 조회 |
 | VisitHistory | idx_vh_registered | (user_id, is_registered_place) | Partial (WHERE is_registered_place=false) | 미등록 장소 이상행동 탐지 |

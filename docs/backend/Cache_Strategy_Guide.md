@@ -108,7 +108,7 @@ Redis          PostgreSQL
 | 데이터 | Cache Key | TTL | 무효화 전략 | Source of Truth |
 |---|---|---|---|---|
 | CareTarget 최신 위치 | `location:latest:{careTargetId}` | TTL 없음(계속 덮어씀) 또는 긴 TTL(1일) | 새 위치 수신 시 덮어쓰기 | **Redis** (DB는 이력 보관용) |
-| Place/GeoFence 목록 | `place:list:{guardianId}` | 5~10분 | Write-Through(등록/수정/삭제 시 즉시 삭제) | PostgreSQL |
+| Place/GeoFence 목록 | `place:list:{targetId}` | 5~10분 | Write-Through(등록/수정/삭제 시 즉시 삭제) | PostgreSQL |
 | CareTarget 기본 정보 | `user:info:{userId}` | 10~30분 | TTL 자연 만료 | PostgreSQL |
 | AI 방문 예측 결과 | `prediction:{careTargetId}:{date}` | 24시간(하루 단위 예측) | TTL 자연 만료 | PostgreSQL(PredictionHistory) |
 | AI 케어 비서 LLM 응답 | `chat:cache:{questionHash}` | 1~7일(개인화 아닌 일반 질의 한정) | TTL 자연 만료 | 캐시 전용(재생성 가능) |
@@ -123,6 +123,7 @@ Redis          PostgreSQL
 | 초대 코드 입력 실패 카운터 | `invite:fail:{token}` | 10분(원본 토큰과 동일 수명) | 5회 도달 시 원본 토큰과 함께 즉시 삭제 | **Redis** |
 
 > `location:latest:{careTargetId}`처럼 API_Response_Rule.md 예시에서 `careTargetId`를 `public_id`(UUID)로 쓰기로 한 정책과 캐시 키 표기를 일치시켰다.
+> `place:list:{guardianId}`는 `{targetId}`로 수정됐다(2026-08) — Place 목록 조회가 `GET /api/guardian/places?careTargetId={id}`로 CareTarget 기준 조회가 되면서(Guardian이 여러 CareTarget을 관리할 수 있어 Guardian 기준 캐시로는 특정 CareTarget의 목록을 가리킬 수 없었음, `Place.target_id` 컬럼 추가와 동일한 이유), 캐시 키도 조회 축과 일치시켰다.
 > 초대 관련 4개 키는 `domain/guardian` Phase 1 구현 시 추가됐다. `invite:pending:{careTargetId}`는 DATABASE_DESIGN_GUIDE.md §3.2가 명시한 `invite:token:{token}` 단일 키만으로는 CareTarget이 "나에게 걸린 대기 요청 목록"을 조회할 방법이 없어(토큰 값을 모르므로 직접 조회 불가) 보조 색인으로 추가한 것이며, Source of Truth는 여전히 `invite:token:{token}`이다 — field별 TTL을 걸지 않고 조회/승인/거절 시점에 원본 토큰 존재 여부로 유효성을 재확인(지연 무효화)한다.
 
 ---

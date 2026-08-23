@@ -143,23 +143,30 @@
 
 ### 3.2 장소(안심구역) 관리
 
+> Guardian이 여러 CareTarget을 관리할 수 있으므로(Guardian 1인당 CareTarget 등록 소프트 상한 10명), Place는 항상 특정 CareTarget 소속으로 조회·등록된다(`Place.target_id`, 2026-08 DB 설계 누락분 보완). 등록·수정·삭제는 해당 CareTarget의 ACTIVE **PRIMARY** Guardian만 가능하고, SUB Guardian은 조회만 가능하다(`DATABASE_DESIGN_GUIDE.md` §3.3/§7).
+
 | Method | URI | 설명 |
 |---|---|---|
-| GET | `/api/guardian/places` | 장소 목록 |
+| GET | `/api/guardian/places?careTargetId={id}` | 장소 목록(`careTargetId` 쿼리 파라미터 필수) |
 | POST | `/api/guardian/places` | 장소 등록 (Google/Kakao/Naver 검색 결과 기반 GeoFence 설정) |
 | PUT | `/api/guardian/places/{id}` | 장소/반경 수정 |
 | DELETE | `/api/guardian/places/{id}` | 장소 삭제 |
 
-`{id}` = Place의 `public_id`.
+`{id}`(PUT/DELETE 경로) = Place의 `public_id`. `careTargetId`(GET 쿼리, POST 요청 바디) = 대상 CareTarget(User)의 `public_id`.
 
 | 구분 | 필드 | 타입 | 설명 |
 |---|---|---|---|
-| Request | `name`, `address` | string | 장소명, 주소 |
-| Request | `latitude`, `longitude` | double | GeoFence 중심 좌표 (위경도 표준 정밀도) |
-| Request | `radius` | int | GeoFence 반경(m), 양수만 허용 |
-| Response | `placeId` | string(UUID) | Place `public_id` |
+| Request(등록) | `careTargetId` | string(UUID) | 이 장소가 속할 CareTarget의 `public_id` — Guardian이 여러 CareTarget을 관리할 수 있으므로 등록 시 명시 필요 |
+| Request(등록/수정) | `name`, `address` | string | 장소명, 주소 |
+| Request(등록/수정) | `latitude`, `longitude` | double | GeoFence 중심 좌표 (위경도 표준 정밀도) |
+| Request(등록/수정) | `radius` | int | GeoFence 반경(m), 양수만 허용 |
+| Response(목록/상세/등록/수정) | `placeId` | string(UUID) | Place `public_id` |
+| Response(목록/상세/등록/수정) | `careTargetId` | string(UUID) | 소속 CareTarget의 `public_id` |
+| Response(목록/상세/등록/수정) | `name`, `address`, `latitude`, `longitude`, `radius` | - | 표시용 정보 |
 
-성공 코드: `PLACE_001` · 주요 실패 코드: `PLACE_001`(404), `PLACE_002`(409, 중복 등록), `PLACE_003`(400, 반경 값 범위 초과)
+PUT(수정) 요청에는 `careTargetId`를 포함하지 않는다 — 장소의 소속 CareTarget은 등록 후 변경할 수 없다.
+
+성공 코드: `PLACE_001`(목록/상세 조회, 등록) / `PLACE_002`(수정) / `PLACE_003`(삭제) · 주요 실패 코드: `PLACE_001`(404, 장소 없음), `PLACE_002`(409, 동일 CareTarget 내 이름 중복 또는 실거리 50m 이내 중복 등록), `PLACE_003`(400, GeoFence 반경 값 범위 초과), `PLACE_004`(409, CareTarget 1인당 Place 등록 수 소프트 상한(15개) 초과), `TARGET_002`(403, 호출자가 해당 CareTarget의 Guardian이 아님), `GUARDIAN_004`(403, 등록/수정/삭제를 SUB Guardian이 호출 — PRIMARY 전용), `COMMON_008`(409, 동시 수정 충돌 — 낙관적 락 실패, 재시도 필요)
 
 ### 3.3 실시간 위치 조회
 

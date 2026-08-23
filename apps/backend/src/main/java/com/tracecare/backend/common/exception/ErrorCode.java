@@ -59,6 +59,7 @@ public enum ErrorCode {
     PLACE_001("PLACE_001", HttpStatus.NOT_FOUND, "등록된 장소를 찾을 수 없습니다"),
     PLACE_002("PLACE_002", HttpStatus.CONFLICT, "이미 등록된 장소입니다"),
     PLACE_003("PLACE_003", HttpStatus.BAD_REQUEST, "GeoFence 반경 값이 올바르지 않습니다"),
+    PLACE_004("PLACE_004", HttpStatus.CONFLICT, "등록 가능한 장소 수를 초과했습니다"),
 
     // Notification
     NOTI_001("NOTI_001", HttpStatus.NOT_FOUND, "알림을 찾을 수 없습니다"),

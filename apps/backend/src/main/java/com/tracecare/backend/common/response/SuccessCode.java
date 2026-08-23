@@ -23,6 +23,8 @@ public enum SuccessCode {
     LOCATION_001("LOCATION_001", "위치 조회 성공"),
     LOCATION_002("LOCATION_002", "위치 전송 성공"),
     PLACE_001("PLACE_001", "장소(안심구역) 등록/조회 성공"),
+    PLACE_002("PLACE_002", "장소(안심구역) 수정 성공"),
+    PLACE_003("PLACE_003", "장소(안심구역) 삭제 성공"),
     NOTI_001("NOTI_001", "알림 조회 성공"),
     NOTI_002("NOTI_002", "알림 읽음 처리 성공"),
     AI_001("AI_001", "AI 응답 생성 성공");
