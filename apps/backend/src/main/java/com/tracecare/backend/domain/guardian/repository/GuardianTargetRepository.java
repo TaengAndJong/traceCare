@@ -29,6 +29,9 @@ public interface GuardianTargetRepository extends JpaRepository<GuardianTarget, 
     List<GuardianTarget> findByTargetIdAndStatusAndGuardianRoleOrderByCreatedAtAsc(
             Long targetId, String status, String guardianRole);
 
+    /** PRIMARY/SUB 구분 없이 해당 CareTarget의 ACTIVE Guardian 전원 — WebSocket 실시간 위치 발행 대상 조회용. */
+    List<GuardianTarget> findByTargetIdAndStatus(Long targetId, String status);
+
     /**
      * PRIMARY 위임(DATABASE_DESIGN_GUIDE.md §7)처럼 특정 관계 행을 잠근 채로 조회해야 하는 트랜잭션에서 사용한다. {@code
      * UserRepository.findByIdForUpdate}와 동일한 패턴.

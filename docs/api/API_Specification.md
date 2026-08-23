@@ -286,7 +286,15 @@ VisitHistory 기준(가공된 "방문 단위" 데이터). 원본 GPS 좌표 나�
 |---|---|---|
 | POST | `/api/care-target/share/location` | 현재 위치를 보호자에게 즉시 공유 |
 
-성공 코드: `LOCATION_002` · 주요 실패 코드: `LOCATION_004`(403, Guardian 호출)
+| 구분 | 필드 | 타입 | 설명 |
+|---|---|---|---|
+| Request | `latitude`, `longitude` | double | GPS 좌표 (§4.1과 동일한 위경도 범위 검증) |
+| Request | `recordedAt` | string(ISO-8601 UTC) | 측정 시각 |
+| Response | `data` | - | `null` |
+
+§4.1(위치 전송)과 동일한 요청 형식이다 — "즉시 공유"가 이미 저장된 최신 위치를 재전달하는 게 아니라, 그 순간의 새 좌표를 받아 Redis 갱신 + WebSocket 개인화 큐 발행까지 즉시 수행하는 흐름이기 때문이다(구현 반영, 2026-08). 저장은 비동기로 처리되어 응답에 `locationId`를 포함하지 않는다.
+
+성공 코드: `LOCATION_002` · 주요 실패 코드: `LOCATION_001`(400, 좌표 범위 오류), `LOCATION_004`(403, Guardian 호출)
 
 ### 4.4 긴급 연락
 
@@ -354,15 +362,19 @@ VisitHistory 기준(가공된 "방문 단위" 데이터). 원본 GPS 좌표 나�
 
 REST Response 표준(§1.2, API_Response_Rule.md)의 적용 범위 밖이다. 별도의 경량 메시지 프레임을 사용한다.
 
-| Path | 방향 | 용도 |
-|---|---|---|
-| `/ws/care-target/location` | CareTarget → Server | 실시간 GPS 송신 |
-| `/ws/guardian/location` | Server → Guardian | 실시간 위치 수신 |
+| Path | 방향 | 용도 | 구현 상태 |
+|---|---|---|---|
+| `/ws/care-target/location` | CareTarget → Server | 실시간 GPS 송신(REST `POST /api/care-target/location`과는 별개의 스트리밍 수신 경로) | 미구현 — 다음 세션(2026-08 Phase 2에서 범위 밖으로 확정) |
+| `/ws/guardian/location` | Server → Guardian | 실시간 위치 수신 | 구현 완료(Phase 2) |
 
-메시지 프레임 공통 형식:
+`/ws/guardian/location`은 개인화 큐(`convertAndSendToUser`, Security_Guide.md §7.5.2)로만 동작한다 — Guardian이 CONNECT하면 서버가 그 세션에 인증된 사용자를 매핑하고, `POST /api/care-target/location`·`POST /api/care-target/share/location` 처리 흐름 안에서 해당 CareTarget의 ACTIVE Guardian 전원에게 `/user/{guardianId}/queue/location`으로 발행한다. 클라이언트는 `/queue/location`을 구독하면 된다(공용 Topic 없음, id 기반 SUBSCRIBE 자체가 존재하지 않음).
+
+메시지 프레임 공통 형식(2026-08 Phase 2에서 `careTargetId` 추가 — 개인화 큐 구조상 한 Guardian의 여러 CareTarget 위치가 같은 큐로 들어와 페이로드로 구분해야 함):
 ```json
-{ "type": "LOCATION_UPDATE", "payload": { "latitude": 37.501234, "longitude": 127.039876, "recordedAt": "2026-08-06T09:15:00Z" }, "timestamp": "2026-08-06T09:15:01Z" }
+{ "type": "LOCATION_UPDATE", "payload": { "careTargetId": "3f2b1a10-9c4e-4a3b-8f2c-1d5e6a7b8c9d", "latitude": 37.501234, "longitude": 127.039876, "recordedAt": "2026-08-06T09:15:00Z" }, "timestamp": "2026-08-06T09:15:01Z" }
 ```
+
+CONNECT 시 `Authorization: Bearer <accessToken>` STOMP 헤더로 REST와 동일한 JWT를 검증한다(Security_Guide.md §7.5.1). 검증 실패 시 연결 자체를 거부한다.
 
 CONNECT 단계에서 인증, SUBSCRIBE 단계에서 리소스 소유권을 검증한다(상세: `docs/security/Security_Guide.md`). 공용 Topic보다 사용자별 개인화 큐(`convertAndSendToUser`)를 우선 사용한다.
 

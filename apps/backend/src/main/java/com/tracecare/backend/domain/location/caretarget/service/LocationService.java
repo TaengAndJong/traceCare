@@ -20,6 +20,7 @@ import com.tracecare.backend.domain.location.repository.LocationHistoryRepositor
 import com.tracecare.backend.domain.location.repository.LocationHistoryWriter;
 import com.tracecare.backend.domain.location.service.LocationCacheStore;
 import com.tracecare.backend.domain.location.service.LocationHistoryAsyncWriter;
+import com.tracecare.backend.domain.location.service.LocationRealtimePublisher;
 
 /**
  * API_Specification.md §4.1(위치 전송/자기 조회), §4.3(즉시 공유). CareTarget Role 여부는
@@ -37,18 +38,21 @@ public class LocationService {
     private final LocationHistoryWriter locationHistoryWriter;
     private final LocationCacheStore locationCacheStore;
     private final LocationHistoryAsyncWriter locationHistoryAsyncWriter;
+    private final LocationRealtimePublisher locationRealtimePublisher;
 
     public LocationService(
             UserRepository userRepository,
             LocationHistoryRepository locationHistoryRepository,
             LocationHistoryWriter locationHistoryWriter,
             LocationCacheStore locationCacheStore,
-            LocationHistoryAsyncWriter locationHistoryAsyncWriter) {
+            LocationHistoryAsyncWriter locationHistoryAsyncWriter,
+            LocationRealtimePublisher locationRealtimePublisher) {
         this.userRepository = userRepository;
         this.locationHistoryRepository = locationHistoryRepository;
         this.locationHistoryWriter = locationHistoryWriter;
         this.locationCacheStore = locationCacheStore;
         this.locationHistoryAsyncWriter = locationHistoryAsyncWriter;
+        this.locationRealtimePublisher = locationRealtimePublisher;
     }
 
     /**
@@ -67,6 +71,12 @@ public class LocationService {
         User caller = findCaller(callerId);
         locationCacheStore.write(
                 caller.getPublicId(),
+                request.getLatitude(),
+                request.getLongitude(),
+                request.getRecordedAt());
+        locationRealtimePublisher.publish(
+                callerId,
+                caller.getPublicId().toString(),
                 request.getLatitude(),
                 request.getLongitude(),
                 request.getRecordedAt());
@@ -105,10 +115,10 @@ public class LocationService {
     }
 
     /**
-     * POST /api/care-target/share/location — 이번 세션 범위는 Redis 갱신 + LocationHistory 저장까지다(실시간 푸시 전달은
-     * WebSocket 세션에서 이어감). 이 응답은 생성된 PK를 돌려줄 필요가 없어(§4.3에 Response 필드 자체가 없음) DB 저장을 {@link
-     * LocationHistoryAsyncWriter}로 완전히 비동기 처리한다 — Redis 캐시만 동기로 갱신해 "즉시 공유"라는 이름에 맞게 조회 가능한 최신 위치는
-     * 곧바로 반영한다.
+     * POST /api/care-target/share/location — Phase 1에서는 Redis 갱신 + LocationHistory 저장까지만 구현했고,
+     * Phase 2(이번)에서 WebSocket 개인화 큐 발행을 마저 연결했다. DB 저장은 여전히 {@link LocationHistoryAsyncWriter}로 완전히
+     * 비동기 처리한다(§4.3 Response에 PK가 없어 응답을 기다릴 필요가 없음). Redis 캐시 갱신과 WebSocket 발행은 "즉시 공유"라는 이름에 맞게
+     * 동기로 수행한다.
      */
     public void shareLocation(Long callerId, LocationSendRequest request) {
         BigDecimal latitude = validateAndConvertLatitude(request.getLatitude());
@@ -117,6 +127,12 @@ public class LocationService {
         User caller = findCaller(callerId);
         locationCacheStore.write(
                 caller.getPublicId(),
+                request.getLatitude(),
+                request.getLongitude(),
+                request.getRecordedAt());
+        locationRealtimePublisher.publish(
+                callerId,
+                caller.getPublicId().toString(),
                 request.getLatitude(),
                 request.getLongitude(),
                 request.getRecordedAt());

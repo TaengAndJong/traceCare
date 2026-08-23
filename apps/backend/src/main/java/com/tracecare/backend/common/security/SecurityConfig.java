@@ -42,6 +42,12 @@ public class SecurityConfig {
                         auth ->
                                 auth.requestMatchers("/api/auth/oauth/login", "/api/auth/refresh")
                                         .permitAll()
+                                        // Security_Guide.md §7.5.1: 인증은 이 HTTP 핸드셰이크가 아니라
+                                        // StompAuthChannelInterceptor가 STOMP CONNECT 프레임에서 수행한다.
+                                        // 여기서 authenticated()로 막으면 CONNECT 프레임 자체가 도달하지
+                                        // 못해 그 검증이 실행되지 않는다.
+                                        .requestMatchers("/ws/**")
+                                        .permitAll()
                                         .requestMatchers("/internal/**")
                                         .denyAll()
                                         .requestMatchers("/api/guardian/**")
