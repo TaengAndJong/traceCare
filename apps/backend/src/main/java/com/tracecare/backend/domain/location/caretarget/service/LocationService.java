@@ -21,6 +21,7 @@ import com.tracecare.backend.domain.location.repository.LocationHistoryWriter;
 import com.tracecare.backend.domain.location.service.LocationCacheStore;
 import com.tracecare.backend.domain.location.service.LocationHistoryAsyncWriter;
 import com.tracecare.backend.domain.location.service.LocationRealtimePublisher;
+import com.tracecare.backend.domain.visit.service.GeoFenceService;
 
 /**
  * API_Specification.md §4.1(위치 전송/자기 조회), §4.3(즉시 공유). CareTarget Role 여부는
@@ -39,6 +40,7 @@ public class LocationService {
     private final LocationCacheStore locationCacheStore;
     private final LocationHistoryAsyncWriter locationHistoryAsyncWriter;
     private final LocationRealtimePublisher locationRealtimePublisher;
+    private final GeoFenceService geoFenceService;
 
     public LocationService(
             UserRepository userRepository,
@@ -46,13 +48,15 @@ public class LocationService {
             LocationHistoryWriter locationHistoryWriter,
             LocationCacheStore locationCacheStore,
             LocationHistoryAsyncWriter locationHistoryAsyncWriter,
-            LocationRealtimePublisher locationRealtimePublisher) {
+            LocationRealtimePublisher locationRealtimePublisher,
+            GeoFenceService geoFenceService) {
         this.userRepository = userRepository;
         this.locationHistoryRepository = locationHistoryRepository;
         this.locationHistoryWriter = locationHistoryWriter;
         this.locationCacheStore = locationCacheStore;
         this.locationHistoryAsyncWriter = locationHistoryAsyncWriter;
         this.locationRealtimePublisher = locationRealtimePublisher;
+        this.geoFenceService = geoFenceService;
     }
 
     /**
@@ -80,6 +84,8 @@ public class LocationService {
                 request.getLatitude(),
                 request.getLongitude(),
                 request.getRecordedAt());
+        geoFenceService.evaluate(
+                callerId, request.getLatitude(), request.getLongitude(), request.getRecordedAt());
 
         return LocationSendResponse.builder()
                 .locationId(locationId)
@@ -136,6 +142,8 @@ public class LocationService {
                 request.getLatitude(),
                 request.getLongitude(),
                 request.getRecordedAt());
+        geoFenceService.evaluate(
+                callerId, request.getLatitude(), request.getLongitude(), request.getRecordedAt());
         locationHistoryAsyncWriter.persist(callerId, latitude, longitude, request.getRecordedAt());
     }
 

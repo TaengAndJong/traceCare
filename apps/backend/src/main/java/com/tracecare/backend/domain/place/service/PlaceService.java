@@ -82,7 +82,22 @@ public class PlaceService {
     public List<PlaceResponse> getPlaces(Long callerId, UUID careTargetPublicId) {
         User target = findTargetByPublicId(careTargetPublicId);
         assertActiveRelation(callerId, target.getId());
+        return getPlacesCached(target);
+    }
 
+    /**
+     * GeoFenceService가 위치 수신 흐름(내부 호출) 안에서 쓴다 — 이미 신뢰된 CareTarget 본인의 내부 PK로 호출하므로 {@link
+     * #getPlaces}와 달리 Guardian 소유권 검증을 하지 않는다. 캐시 Aside 로직({@code place:list:{targetId}})은 동일하게
+     * 재사용한다(Cache_Strategy_Guide.md §3.2 — "GeoFence 판정에 Redis 캐시 사용" 요구사항).
+     */
+    @Transactional(readOnly = true)
+    public List<PlaceResponse> getPlacesForGeofence(Long targetId) {
+        User target =
+                userRepository.findById(targetId).orElseThrow(CareTargetNotFoundException::new);
+        return getPlacesCached(target);
+    }
+
+    private List<PlaceResponse> getPlacesCached(User target) {
         String cacheKey = cacheKeyGenerator.placeList(String.valueOf(target.getId()));
         List<PlaceResponse> cached = readListCache(cacheKey);
         if (cached != null) {

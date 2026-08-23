@@ -195,7 +195,16 @@ PUT(수정) 요청에는 `careTargetId`를 포함하지 않는다 — 장소의 
 
 VisitHistory 기준(가공된 "방문 단위" 데이터). 원본 GPS 좌표 나열이 아니라 `placeName`/`arrivalTime`/`departureTime`/`stayMinutes`/`isRegisteredPlace` 단위로 응답한다(상세 예시: API_Response_Rule.md §8.7).
 
-성공 코드: `VISIT_001` · 주요 실패 코드: `VISIT_001`(404), `VISIT_002`(400, 조회 기간 값 오류)
+| 구분 | 필드 | 타입 | 설명 |
+|---|---|---|---|
+| Request(공통, 쿼리) | `careTargetId` | string(UUID) | 조회 대상 CareTarget의 `public_id` — 3개 엔드포인트 모두 필수 |
+| Request(`/history/date`, 쿼리) | `date` | string(`yyyy-MM-dd`) | 조회할 날짜. 서버 타임존(`ZoneId.systemDefault()`) 기준 하루 단위로 조회하며, 오늘보다 미래인 날짜는 `VISIT_002` |
+| Request(`/history/place`, 쿼리) | `placeId` | string(UUID) | 조회할 등록 Place의 `public_id`(전체 기간 조회) |
+| Response | `content` | array | 표준 목록 페이징 구조(API_Response_Rule.md §1.4). 각 항목은 `placeName`/`arrivalTime`/`departureTime`/`stayMinutes`/`isRegisteredPlace` |
+
+`/history/today`는 `/history/date`에 서버 타임존 기준 오늘 날짜를 넣은 것과 동일하다. 조회 결과가 없으면(해당 기간에 방문 이력 없음) 빈 목록(200)이 아니라 `VISIT_001`(404)을 반환한다(API_Response_Rule.md §8.7 예시와 동일).
+
+성공 코드: `VISIT_001` · 주요 실패 코드: `VISIT_001`(404, 조회 가능한 방문 이력 없음), `VISIT_002`(400, 조회 기간 값 오류 — 미래 날짜 등), `TARGET_002`(403, 관계 미매핑)
 
 ### 3.5 AI 방문 예측 (머신러닝, FastAPI 연동)
 
