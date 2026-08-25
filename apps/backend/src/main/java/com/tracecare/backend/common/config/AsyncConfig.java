@@ -25,4 +25,16 @@ public class AsyncConfig {
         executor.initialize();
         return executor;
     }
+
+    /** 알림(FCM 발송 등 외부 I/O) 전용 풀 — location과 워크로드 특성이 달라(외부 네트워크 호출, 실패 가능성 높음) 공유하지 않는다. */
+    @Bean(name = "notificationTaskExecutor")
+    public Executor notificationTaskExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(4);
+        executor.setQueueCapacity(500);
+        executor.setThreadNamePrefix("notification-async-");
+        executor.initialize();
+        return executor;
+    }
 }

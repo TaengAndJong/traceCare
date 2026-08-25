@@ -248,8 +248,11 @@ AI 예측(Feature Engineering)의 입력 데이터로 사용된다. place_name�
 | read_at | TIMESTAMPTZ | NULL | — | 읽음 시각 |
 | response_at | TIMESTAMPTZ | NULL | — | 응답 시각 |
 | status | VARCHAR(20) | NOT NULL | 'SENT' | SENT/READ/RESPONDED/FAILED |
+| place_name | VARCHAR(150) | NULL | — | 발송 당시 장소명 스냅샷(생성 시점 고정) — GeoFence와 무관한 알림 타입(AI_WEEKLY_REPORT 등)은 NULL (2026-08 알림 도메인 후속 보완) |
 
 target_id·is_retry 추가는 새로운 결정이 아니라 원 기획서에 이미 명시된 요구사항("저장 항목: 사용자 ID, 보호 대상자 ID, 재발송 여부")의 반영 누락을 바로잡은 것이다. event_id는 하나의 이벤트(예: 긴급 알림 1건)가 여러 Guardian에게 개별 행으로 발송될 때, 같은 이벤트임을 식별해 "다른 보호자가 이미 확인함" 등을 표시하기 위한 상관관계 키다. type의 최종 7종 확정 근거는 §13 참고.
+
+**place_name은 실시간 FK 조회가 아니라 생성 시점 스냅샷이다** — `VisitHistory.place_name`(§3.5)과 동일한 이유로, `NotificationHistory`는 감사 로그 성격이라 발송 이후 원본 Place의 이름이 바뀌거나 삭제돼도 "그 당시 실제 보낸 문구"가 왜곡되면 안 된다. 그래서 `place_id` 같은 FK가 아니라 문자열 스냅샷만 저장한다.
 
 ### 4.8 ChatHistory
 

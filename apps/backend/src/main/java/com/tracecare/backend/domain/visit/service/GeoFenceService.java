@@ -64,18 +64,41 @@ public class GeoFenceService {
     }
 
     /**
-     * CareTarget의 위치 수신(저장) 흐름에서 매번 호출된다. NotificationHistory 기록/FCM 발송(다음 세션)은 여기서 하지 않고, 도착/이탈이
-     * 감지된 시점에 {@link VisitArrivedEvent}/{@link VisitDepartedEvent}만 발행해 확장 지점을 남긴다.
+     * CareTarget의 위치 수신(저장) 흐름에서 매번 호출된다. NotificationHistory 기록/FCM 발송은 여기서 하지 않고, 도착/이탈이 감지된 시점에
+     * {@link VisitArrivedEvent}/{@link VisitDepartedEvent}만 발행해 리스너에게 위임한다.
+     *
+     * <p><b>역순 이벤트 방어</b>: 네트워크 재전송/오프라인 배치 동기화로 {@code recordedAt} 기준 과거 이벤트가 최근 이벤트보다 늦게 도착할 수
+     * 있다. "마지막으로 GeoFence 판정을 거친 시각"보다 이번 이벤트가 과거면 도착/이탈 판단 자체를 건너뛴다 — 원본 위치는 이 메서드 호출 이전에 이미
+     * {@code LocationHistory}에 그대로 저장되므로(호출부인 LocationService 참고) 여기서 건너뛰어도 원본 기록은 유실되지 않는다. 새 컬럼이나
+     * 캐시를 추가하지 않고, 이미 조회하는 최신 VisitHistory 행에서 기준 시각을 그대로 뽑아 쓴다 — 열린 방문이면 그 행의 {@code
+     * arrivalTime}(마지막 도착 판정 시각), 없으면(이미 종료된 방문만 있으면) 그 행의 {@code departureTime}(마지막 이탈 판정 시각)이
+     * "마지막으로 판정을 거친 시각"과 정확히 같다 — 둘 다 이 메서드가 실제로 상태를 바꾼 시점에만 기록되는 값이기 때문이다.
      */
     @Transactional
     public void evaluate(Long careTargetId, Double latitude, Double longitude, Instant recordedAt) {
+        Optional<VisitHistory> lastVisit =
+                visitHistoryRepository.findFirstByUserIdOrderByArrivalTimeDesc(careTargetId);
+
+        Instant lastEvaluatedAt =
+                lastVisit
+                        .map(
+                                visit ->
+                                        visit.isOpen()
+                                                ? visit.getArrivalTime()
+                                                : visit.getDepartureTime())
+                        .orElse(null);
+        if (lastEvaluatedAt != null && recordedAt.isBefore(lastEvaluatedAt)) {
+            log.warn(
+                    "event=GEOFENCE_STALE_EVENT_SKIPPED, careTargetId={}, recordedAt={}, lastEvaluatedAt={}",
+                    careTargetId,
+                    recordedAt,
+                    lastEvaluatedAt);
+            return;
+        }
+
         List<PlaceResponse> places = placeService.getPlacesForGeofence(careTargetId);
         PlaceResponse matched = findClosestMatch(places, latitude, longitude);
-
-        Optional<VisitHistory> openVisit =
-                visitHistoryRepository
-                        .findFirstByUserIdOrderByArrivalTimeDesc(careTargetId)
-                        .filter(VisitHistory::isOpen);
+        Optional<VisitHistory> openVisit = lastVisit.filter(VisitHistory::isOpen);
 
         if (matched != null
                 && openVisit.isPresent()

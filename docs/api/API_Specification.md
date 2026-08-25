@@ -232,11 +232,15 @@ VisitHistory 기준(가공된 "방문 단위" 데이터). 원본 GPS 좌표 나�
 
 | Method | URI | 설명 |
 |---|---|---|
-| GET | `/api/guardian/notifications` | 알림 목록 |
+| GET | `/api/guardian/notifications` | 알림 목록 — **읽지 않은(status≠READ) 알림만** |
 | PUT | `/api/guardian/notifications/{id}/read` | 읽음 처리 |
-| GET | `/api/guardian/notifications/history` | 알림 이력 전체 |
+| GET | `/api/guardian/notifications/history` | 알림 이력 전체 — 읽음 여부 무관, 전체 |
+
+**목록 vs 이력**: `/notifications`(목록)는 트리아지용으로 안읽은 알림만 반환하고(`idx_nh_user_status(user_id, status) WHERE status<>'READ'` 인덱스 사용), `/notifications/history`(이력)는 감사/과거 조회용으로 읽음 여부와 무관하게 전체를 반환한다(`idx_nh_user_sent(user_id, sent_at DESC)` 인덱스 사용) — 두 인덱스가 DB에 공존하는 이유이기도 하다.
 
 `{id}` = NotificationHistory 내부 PK(시계열 데이터, `public_id` 정책 미적용).
+
+응답 `content` 항목의 `body`는 도착(ARRIVAL) 알림이면 실제 장소명을 포함한 문구("{장소명}에 도착했습니다")를 우선 사용하고, 장소명 스냅샷이 없는 레코드(2026-08 `place_name` 컬럼 추가 이전 생성분)는 일반화된 문구로 대체한다.
 
 성공 코드: `NOTI_001`(조회) / `NOTI_002`(읽음 처리) · 주요 실패 코드: `NOTI_001`(404)
 
@@ -332,10 +336,12 @@ VisitHistory 기준(가공된 "방문 단위" 데이터). 원본 GPS 좌표 나�
 
 | Method | URI | 설명 |
 |---|---|---|
-| GET | `/api/care-target/notifications` | 알림 조회 |
+| GET | `/api/care-target/notifications` | 알림 조회 — **전체**(읽음 여부 무관) |
 | PUT | `/api/care-target/notifications/{id}/read` | 읽음 처리 |
 | GET | `/api/care-target/profile` | 내 정보 조회 |
 | PUT | `/api/care-target/profile` | 내 정보 수정 |
+
+Guardian 쪽(§3.7)과 달리 "목록(안읽음)"/"이력(전체)" 두 엔드포인트로 나뉘어 있지 않다 — CareTarget에게는 별도 이력 엔드포인트가 없어, 이 하나뿐인 조회 엔드포인트가 §3.7의 `/notifications/history`와 동일하게 전체를 반환한다. 관계 검증(§4.5 등)이 필요 없다 — 조회 대상이 항상 호출자 자신이 수신한 알림이기 때문이다.
 
 성공 코드: `NOTI_001` / `USER_001` / `USER_002`
 

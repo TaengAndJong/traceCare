@@ -191,6 +191,11 @@ CREATE TABLE "NotificationHistory" (
     read_at         TIMESTAMPTZ,
     response_at     TIMESTAMPTZ,
     status          VARCHAR(20) NOT NULL DEFAULT 'SENT',
+    -- place_name: 발송 당시 장소명 스냅샷(생성 시점 고정, 실시간 FK 조회 아님) — Place가 나중에 개명/삭제돼도
+    -- 그 당시 실제 발송한 문구를 그대로 복원하기 위함(§3.5 VisitHistory.place_name과 동일한 이유). GeoFence와
+    -- 무관한 알림 타입(AI_WEEKLY_REPORT 등)에는 값이 없을 수 있어 NULL 허용. 길이는 Place.name과 동일하게 맞춤
+    -- (2026-08 알림 도메인 후속 보완).
+    place_name      VARCHAR(150),
 
     CONSTRAINT pk_nh PRIMARY KEY (id),
     CONSTRAINT ck_nh_status CHECK (status IN ('SENT', 'READ', 'RESPONDED', 'FAILED')),
