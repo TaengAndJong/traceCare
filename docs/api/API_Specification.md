@@ -319,7 +319,16 @@ VisitHistory 기준(가공된 "방문 단위" 데이터). 원본 GPS 좌표 나�
 
 > 안전(Safety) 핵심 기능. 실패 처리 원칙은 API_Response_Rule.md §5.2(EMERGENCY 도메인), §8.9를 반드시 함께 따른다 — 일반화된 500 문구로 뭉개지 않고 재시도/대체 수단을 안내한다.
 
-성공 코드: `NOTI_001` · 주요 실패 코드: `EMERGENCY_001`(403, Guardian 호출), `EMERGENCY_002`(400, 등록된 보호자 연락처 없음), `EMERGENCY_003`(500, 연동 자체 실패)
+| 구분 | 필드 | 타입 | 설명 |
+|---|---|---|---|
+| Request(`/location`) | `latitude`, `longitude`, `recordedAt` | - | §4.3(현재 위치 공유)과 동일한 형식 — Redis 갱신 + WebSocket 발행까지 그대로 재사용, "긴급" 여부만 알림 발송 경로에 반영된다(구현 반영, 2026-08) |
+| Request(`/call`, `/message`) | — | — | 요청 바디 없음(호출자 = 인증된 CareTarget 본인, 대상 = 그 CareTarget의 ACTIVE Guardian 전원으로 자동 결정) |
+| Response(공통) | `eventId` | string(UUID) | 이 발송 시도를 묶는 `NotificationHistory.event_id` |
+| Response(공통) | `guardianContacted` | boolean | ACTIVE Guardian 중 1명 이상 발송 성공 여부(= 응답 `success:true`와 항상 일치) |
+
+3개 엔드포인트는 응답 형식과 성공/실패 판단 기준(ACTIVE Guardian 전원 시도 → 1명 이상 성공 시 전체 성공, 전원 실패 시에만 `EMERGENCY_003`)을 공유한다. 상세 예시는 API_Response_Rule.md §8.9 참고.
+
+성공 코드: `EMERGENCY_001`(2026-08 정정 — 기존 `NOTI_001`은 문서 오류) · 주요 실패 코드: `EMERGENCY_001`(403, Guardian 호출), `EMERGENCY_002`(400, 등록된 보호자 연락처 없음), `EMERGENCY_003`(500, 연동 자체 실패, fail-safe 대상)
 
 ### 4.5 AI 도우미
 

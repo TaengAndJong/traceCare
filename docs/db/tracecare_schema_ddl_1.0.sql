@@ -245,7 +245,26 @@ CREATE TABLE "ChatEmbedding" (
 COMMENT ON TABLE "ChatEmbedding" IS 'ChatHistory 1:1 파생 벡터. Google Gemini Embedding(gemini-embedding-001, output_dimensionality=768) 기준 VECTOR(768) 최종 확정(§3.9, §11.3). RAG 검색용 인덱스이며 원문(ChatHistory)은 별도 보존됨';
 
 -- ---------------------------------------------------------------------
--- 02-10. updated_at 자동 갱신 트리거 (User, Place — 설계 가이드 §4.1/§4.3 "트리거 자동 갱신" 반영)
+-- 02-10. ArrivalHistory (Time-Series, 파티셔닝 조건부 권장 — 현 단계 미적용) — CareTarget이
+-- 능동적으로 확인 버튼을 눌러 만든 도착 확인 기록. VisitHistory(백그라운드 자동 GeoFence 판정)와는
+-- 완전히 별개의 기록이다(2026-08 도착 확인/긴급 연락 세션, 설계 가이드 §3.10).
+-- ---------------------------------------------------------------------
+CREATE TABLE "ArrivalHistory" (
+    id                  BIGINT GENERATED ALWAYS AS IDENTITY,
+    user_id             BIGINT NOT NULL,
+    place_id            BIGINT NOT NULL,
+    place_name          VARCHAR(150) NOT NULL,
+    latitude            NUMERIC(10, 7) NOT NULL,
+    longitude           NUMERIC(11, 7) NOT NULL,
+    confirmed_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT pk_ah PRIMARY KEY (id)
+);
+
+COMMENT ON TABLE "ArrivalHistory" IS 'CareTarget이 능동적으로 확인한 등록 장소 도착 기록(POST /api/care-target/arrival/check). place_name은 확인 당시 스냅샷(VisitHistory.place_name과 동일한 설계 원칙). 데이터량이 임계치를 넘으면 VisitHistory와 동일한 방식으로 파티셔닝 전환 검토(§11.2)';
+
+-- ---------------------------------------------------------------------
+-- 02-11. updated_at 자동 갱신 트리거 (User, Place — 설계 가이드 §4.1/§4.3 "트리거 자동 갱신" 반영)
 -- ---------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS TRIGGER AS $$
@@ -345,6 +364,18 @@ ALTER TABLE "ChatHistory"
 ALTER TABLE "ChatEmbedding"
     ADD CONSTRAINT fk_ce_chat FOREIGN KEY (chat_history_id)
         REFERENCES "ChatHistory" (id) ON DELETE CASCADE ON UPDATE NO ACTION;
+
+-- ---------------------------------------------------------------------
+-- ArrivalHistory → User (user_id), Place (place_id) — place_id는 NOT NULL이라
+-- VisitHistory(SET NULL)와 달리 RESTRICT를 쓴다(User FK와 동일 패턴).
+-- ---------------------------------------------------------------------
+ALTER TABLE "ArrivalHistory"
+    ADD CONSTRAINT fk_ah_user FOREIGN KEY (user_id)
+        REFERENCES "User" (id) ON DELETE RESTRICT ON UPDATE NO ACTION;
+
+ALTER TABLE "ArrivalHistory"
+    ADD CONSTRAINT fk_ah_place FOREIGN KEY (place_id)
+        REFERENCES "Place" (id) ON DELETE RESTRICT ON UPDATE NO ACTION;
 
 
 -- =====================================================================
@@ -452,6 +483,17 @@ CREATE INDEX idx_ch_user_created
 
 -- ChatEmbedding.chat_history_id는 uq_ce_chat_history_id UNIQUE 제약으로 이미
 -- 인덱스가 자동 생성되므로 별도 FK 인덱스 불필요.
+
+-- ---------------------------------------------------------------------
+-- ArrivalHistory
+-- ---------------------------------------------------------------------
+CREATE INDEX idx_ah_user_confirmed
+    ON "ArrivalHistory" (user_id, confirmed_at DESC);
+
+-- place_id는 FK 대상 컬럼이라 §9 공통 원칙("모든 FK 대상 컬럼에 명시적 인덱스 필요")에 따라
+-- 인덱스를 만든다. NOT NULL이라 idx_vh_place와 달리 Partial Index가 아니다.
+CREATE INDEX idx_ah_place
+    ON "ArrivalHistory" (place_id);
 
 
 -- =====================================================================

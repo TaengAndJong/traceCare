@@ -145,6 +145,12 @@ AI 예측(Feature Engineering)의 입력 데이터로 사용된다. place_name�
 
 **Embedding 모델 확정**: LLM Provider가 Google Gemini로 확정됨에 따라, Embedding도 동일 생태계인 Gemini Embedding(gemini-embedding-001)으로 통일한다. 동일 API 키로 LLM·Embedding을 함께 관리할 수 있어 사용량 추적이 단순해진다(§8 참고). 출력 차원은 공식 권장 3종(768/1536/3072) 중 768차원으로 확정한다 — MRL(Matryoshka Representation Learning) 기법상 차원을 낮춰도 품질 손실이 크지 않으면서, 포트폴리오~초기 상용화 규모에서 저장 공간·인덱스 크기·검색 속도 이점이 더 실질적이기 때문이다 (비교 근거는 §13 참고).
 
+### 3.10 ArrivalHistory — (신규) CareTarget이 능동적으로 확인한 도착 기록
+
+원 기획서/이전 설계 문서에 누락되어 있던 테이블이다(2026-08 도착 확인/긴급 연락 세션에서 추가). `POST /api/care-target/arrival/check`로 CareTarget이 직접 "여기 도착했다"고 확인 버튼을 누른 기록만 담는다 — 백그라운드에서 GeoFence 판정이 자동으로 만드는 `VisitHistory`(§3.5)와는 **완전히 별개의 기록**이다. 하나는 "사용자가 능동적으로 확인한 사건"이고 하나는 "시스템이 위치 수신마다 자동 판정한 상태 전이"라 성격이 다르고, 문서 어디에도 두 기록을 연동하라는 근거가 없어 서로 참조하지 않는다(자세한 판단 근거는 결과 보고 참고).
+
+`place_id`는 `VisitHistory`와 달리 NOT NULL이다 — 도착 확인은 항상 사용자가 특정 등록 Place를 선택해 호출하는 행위라 "미등록 장소" 개념 자체가 없다(GeoFence 자동 판정과 달리 반경 밖이면 애초에 `ARRIVAL_002`로 거부되고 행이 생성되지 않는다). `place_name`은 확인 당시 스냅샷(VisitHistory.place_name과 동일한 이유 — 이력 불변성).
+
 ---
 
 ## 4. 컬럼 정의
@@ -273,6 +279,18 @@ target_id·is_retry 추가는 새로운 결정이 아니라 원 기획서에 이
 | embedding | VECTOR(768) | NOT NULL | — | 임베딩 벡터 — Gemini gemini-embedding-001, output_dimensionality=768 기준 최종 확정 (§13 근거). 모델 교체 시 전량 재임베딩 필요 (§11.3 마이그레이션 원칙 참고) |
 | created_at | TIMESTAMPTZ | NOT NULL | CURRENT_TIMESTAMP | 생성 시각 |
 
+### 4.10 ArrivalHistory (신규, 2026-08 도착 확인/긴급 연락 세션)
+
+| 컬럼 | 타입 | NULL | 기본값 | 설명 |
+|---|---|---|---|---|
+| id | BIGINT (IDENTITY) | NOT NULL | — | PK |
+| user_id | BIGINT | NOT NULL | — | User(보호대상자) 참조 |
+| place_id | BIGINT | NOT NULL | — | Place 참조 — VisitHistory와 달리 NOT NULL(§3.10 근거) |
+| place_name | VARCHAR(150) | NOT NULL | — | 확인 당시 장소명 스냅샷 |
+| latitude | NUMERIC(10,7) | NOT NULL | — | 확인 시점 위도 |
+| longitude | NUMERIC(11,7) | NOT NULL | — | 확인 시점 경도 |
+| confirmed_at | TIMESTAMPTZ | NOT NULL | CURRENT_TIMESTAMP | 도착 확인 시각 |
+
 ---
 
 ## 5. PK / FK 정의
@@ -288,6 +306,7 @@ target_id·is_retry 추가는 새로운 결정이 아니라 원 기획서에 이
 | NotificationHistory | id | user_id, target_id | User(id), User(id) |
 | ChatHistory | id | user_id | User(id) |
 | ChatEmbedding | id | chat_history_id | ChatHistory(id) |
+| ArrivalHistory | id | user_id, place_id | User(id), Place(id) |
 
 LocationHistory의 PK가 (id, recorded_at) 복합키인 이유: PostgreSQL 선언적 파티셔닝은 파티션 키 컬럼이 PK/UNIQUE에 포함되어야 하는 제약이 있다. 애플리케이션에서 id 단독으로 특정 행을 조회하는 로직이 있다면, 조회 조건에 recorded_at(또는 범위)을 함께 제공하도록 API/쿼리 설계를 조정해야 한다 — 백엔드 구현 단계에서 반드시 확인 필요.
 
@@ -441,6 +460,8 @@ GuardianTarget 카디널리티 및 Place 등록 권한 범위는 이전 [결정 
 | NotificationHistory | idx_nh_event (신규) | event_id | B-Tree | 동일 이벤트로 발송된 다른 Guardian 수신 행 조회 (§14 항목 12 결정 반영) |
 | ChatHistory | idx_ch_user_created | (user_id, created_at DESC) | Composite B-Tree | 대화 이력 조회 |
 | ChatEmbedding | idx_chat_embedding_hnsw | embedding | HNSW (vector_cosine_ops) | 유사 질문 벡터 검색 (RAG) |
+| ArrivalHistory | idx_ah_user_confirmed (신규) | (user_id, confirmed_at DESC) | Composite B-Tree | 도착 확인 이력 조회 (2026-08 도착 확인/긴급 연락 세션) |
+| ArrivalHistory | idx_ah_place (신규) | place_id | B-Tree | FK 대상 컬럼 — place_id가 NOT NULL이라 idx_vh_place와 달리 Partial이 아니다 |
 
 **공통 원칙**: (1) 복합 인덱스는 선택도(Cardinality)가 높은 컬럼을 앞에 배치, (2) "삭제되지 않은 것만/특정 상태만" 조회되는 경우 Partial Index 적극 활용, (3) 쓰기가 압도적인 테이블은 인덱스를 최소로 유지, (4) PostgreSQL은 FK에 자동으로 인덱스를 생성하지 않으므로 모든 FK 대상 컬럼에 명시적 인덱스 필요.
 
@@ -462,6 +483,7 @@ GuardianTarget 카디널리티 및 Place 등록 권한 범위는 이전 [결정 
 | PredictionHistory | Hard Delete(배치) | 6개월 | Derived Data(원본으로 재계산 가능)라 상대적으로 짧게 채택 |
 | NotificationHistory | Hard Delete(배치) | 1년 (감사 목적) | 가이드 확정값 유지 |
 | ChatHistory / ChatEmbedding | 서비스 정책에 따름 + 사용자 삭제 요청 시 즉시 반영 | 1년 | 사용자 삭제 요청 시 보관주기와 무관하게 즉시 삭제 예외 유지 |
+| ArrivalHistory (신규) | Hard Delete(배치) | 1년 | VisitHistory와 성격이 같은 시계열 이력이라 동일 기준 적용 |
 
 위 보관 기간은 가이드가 제시한 범위 내에서 가장 보수적인(짧은) 값을 잠정 채택한 것이다 — 최솟값을 기본으로 정하면 이후 법무 검토에서 기간을 늘리는 것은 쉽지만, 처음부터 길게 잡아 나중에 줄이면 "이미 삭제됐어야 할 데이터를 과다 보관"한 상태가 만들어질 수 있어 최솟값이 더 안전한 기본값이다. **개인정보 처리방침이 정식 수립되면 최종 확정값으로 재조정한다.**
 

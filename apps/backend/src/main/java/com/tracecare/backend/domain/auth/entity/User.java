@@ -84,4 +84,17 @@ public class User {
         this.name = name;
         this.birthDate = birthDate;
     }
+
+    /**
+     * PUT .../profile(§3.8/§4.6) — name/phone만 다룬다. GuardianTarget.relation/alias(관계별 라벨)와는 별개다.
+     */
+    public void updateProfile(String name, String phone) {
+        this.name = name;
+        this.phone = phone;
+    }
+
+    /** PUT .../profile/image — profile_image는 URL 문자열이다(DATABASE_DESIGN_GUIDE.md §4.1). */
+    public void updateProfileImage(String profileImage) {
+        this.profileImage = profileImage;
+    }
 }

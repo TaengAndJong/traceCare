@@ -342,7 +342,9 @@ Spring Security의 Filter는 `DispatcherServlet` 이전에 동작하므로, `@Re
 | Refresh Token 만료 | 401 (`AUTH_004`) | 재로그인 필요, refresh 재시도 금지 |
 | 로그아웃/탈퇴로 JWT Blacklist 등록됨 | 401 (`AUTH_006`) | 위와 별도 원인이므로 다른 코드로 구분 |
 | 인증은 됐으나 Role 불일치 (Guardian 전용 API에 CareTarget 접근 등) | 403 (`GUARDIAN_001`) | Filter 단계(`AccessDeniedHandler`)에서 응답, `GlobalExceptionHandler`를 거치지 않음 — 8.1 1단계 표 참고 |
-| 인증은 됐으나 리소스 소유자 불일치 (타인의 CareTarget/Place 접근) | **403 고정** (`TARGET_002` 등) | API Response Rule §4.1이 "3단계 리소스 접근 제어 = 403"을 이 프로젝트의 핵심 판단 기준으로 이미 확정했으므로, 리소스 존재 여부를 숨기고 싶다는 이유로 404로 대체하지 않는다. 예외를 두지 않는다. Service 계층 → `GlobalExceptionHandler` 경로(8.1 3단계 표 참고) |
+| 인증은 됐으나 리소스 소유자 불일치 (타인의 CareTarget/Place 접근) | **403 원칙** (`TARGET_002` 등) | API Response Rule §4.1이 "3단계 리소스 접근 제어 = 403"을 이 프로젝트의 핵심 판단 기준으로 이미 확정했으므로, 리소스 존재 여부를 숨기고 싶다는 이유로 404로 대체하지 않는다. 아래 예외 조항에 해당하지 않는 한 예외를 두지 않는다. Service 계층 → `GlobalExceptionHandler` 경로(8.1 3단계 표 참고) |
+
+> **예외(2026-08 도착 확인 세션 확정)**: 위 리소스를 나열/탐색할 수 있는 조회 API 자체가 없고, 식별자가 추측 불가능한 UUID(`public_id`)인 경우에 한해 기존 404 코드를 재사용할 수 있다 — 이 좁은 조건에서는 403과 404의 실질적인 정보 노출 차이가 없기 때문이다. 예: `POST /api/care-target/arrival/check`에서 호출자(CareTarget) 소유가 아닌 `placeId`를 넘기면 새 403 코드를 만드는 대신 `PlaceNotFoundException`(`PLACE_001`, 404)을 그대로 재사용한다 — CareTarget이 타인의 Place를 열람/나열할 API 자체가 없어(그런 목록 조회 기능이 없음), 리소스 존재를 404로 숨겨도 추가로 노출되는 정보가 없다. 이 예외는 "새 403 코드를 만들기 귀찮아서"가 아니라 위 두 조건이 **동시에** 성립할 때만 적용한다 — 조회/나열 API가 조금이라도 있거나 식별자가 추측 가능하면 원칙대로 403을 쓴다.
 
 ### 8.3 원칙
 

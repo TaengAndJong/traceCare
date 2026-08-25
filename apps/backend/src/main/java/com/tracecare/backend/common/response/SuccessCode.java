@@ -28,7 +28,9 @@ public enum SuccessCode {
     VISIT_001("VISIT_001", "방문 히스토리 조회 성공"),
     NOTI_001("NOTI_001", "알림 조회 성공"),
     NOTI_002("NOTI_002", "알림 읽음 처리 성공"),
-    AI_001("AI_001", "AI 응답 생성 성공");
+    AI_001("AI_001", "AI 응답 생성 성공"),
+    ARRIVAL_001("ARRIVAL_001", "도착 확인 성공"),
+    EMERGENCY_001("EMERGENCY_001", "긴급 연락 발송 성공");
 
     private final String code;
     private final String message;

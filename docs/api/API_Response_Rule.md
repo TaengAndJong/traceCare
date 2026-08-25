@@ -146,6 +146,9 @@
 | NOTI_001 | 알림 조회 성공 |
 | NOTI_002 | 알림 읽음 처리 성공 |
 | AI_001 | AI 응답 생성 성공 |
+| VISIT_001 | 방문 히스토리 조회 성공(§8.7) — 5.1절과 동일하게 `ErrorCode.VISIT_001`(404)과는 별도 번호 공간 |
+| ARRIVAL_001 | 도착 확인 성공(§8.8) — `ErrorCode.ARRIVAL_001`(403, Guardian 호출)과는 별도 번호 공간 |
+| EMERGENCY_001 | 긴급 연락(전화/문자/위치) 발송 성공(§8.9) — `ErrorCode.EMERGENCY_001`(403, Guardian 호출)과는 별도 번호 공간. call/message/location 세 엔드포인트가 의미상 동일한 액션(보호자에게 긴급 상황을 알림)이라 코드를 통일했다 |
 
 ---
 
@@ -972,16 +975,18 @@ Error — CareTarget당 ACTIVE Guardian 정원(3명) 초과 (409)
 
 ### 8.9 긴급 연락 (`POST /api/care-target/emergency/call`, CareTarget 전용)
 
-**Success (200)** — 통신사 API/SMS 연동을 통해 보호자에게 즉시 연락
+`/emergency/call`·`/emergency/message`·`/emergency/location` 3개 엔드포인트가 이 응답 형식을 공유한다(성공 코드 정리: 2026-08, 기존에 잘못 기재돼 있던 `NOTI_001`을 `EMERGENCY_001`로 수정 — §2.3 참고). ACTIVE Guardian 전원에게 개별 발송을 시도하는 구조라 `NotificationHistory`처럼 `event_id`로 묶이며, **1명 이상 성공하면 전체를 성공으로 응답한다**(연락 가능성을 최대화하는 것이 안전 기능의 우선순위이므로, 일부 Guardian 발송 실패로 전체를 실패 처리하지 않는다). 전원 실패했을 때만 `EMERGENCY_003`.
+
+**Success (200)** — 통신사 API/SMS 연동을 통해 보호자에게 즉시 연락(1명 이상 성공)
 ```json
-{ "success": true, "code": "NOTI_001", "message": "보호자에게 긴급 연락을 전송했습니다", "data": { "notificationId": 5599, "guardianContacted": true } }
+{ "success": true, "code": "EMERGENCY_001", "message": "보호자에게 긴급 연락을 전송했습니다", "data": { "eventId": "f1e2d3c4-b5a6-4978-8899-001122334455", "guardianContacted": true } }
 ```
 
-**Error — 연동 자체가 실패 (500, fail-safe 대상)**
+**Error — 전원 발송 실패 (500, fail-safe 대상)**
 ```json
 { "success": false, "code": "EMERGENCY_003", "message": "긴급 연락 발송에 실패했습니다. 다시 시도해주세요", "data": null }
 ```
-> `EMERGENCY_003`은 재시도 로직(Frontend 자동 재시도 1회 + 실패 시 대체 수단 안내)과 반드시 함께 구현한다. 안전 기능이므로 COMMON_001의 일반화된 재시도 문구로 대체하지 않는다(안전 관련 fail-safe 원칙, `docs/security/Security_Guide.md` 및 `.claude/rules/security.md` 4절 참고).
+> `EMERGENCY_003`은 재시도 로직(Frontend 자동 재시도 1회 + 실패 시 대체 수단 안내)과 반드시 함께 구현한다. 안전 기능이므로 COMMON_001의 일반화된 재시도 문구로 대체하지 않는다(안전 관련 fail-safe 원칙, `docs/security/Security_Guide.md` 및 `.claude/rules/security.md` 4절 참고). 재시도는 Frontend 책임이다 — Backend는 서버 사이드 자동 재시도 없이 이번 시도의 성공/실패를 그대로 즉시 응답한다(문서 문구 "Frontend 자동 재시도"가 이미 책임 소재를 명시).
 
 ---
 

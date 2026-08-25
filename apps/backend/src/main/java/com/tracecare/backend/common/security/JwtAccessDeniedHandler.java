@@ -26,6 +26,9 @@ import com.tracecare.backend.common.response.ApiResponse;
  * 쓴다(API_Response_Rule.md §5.2). 단, `/api/care-target/location`(§4.1)과
  * `/api/care-target/share/location`(§4.3)은 API_Specification.md가 각각 LOCATION_003/LOCATION_004를 Role
  * 불일치 코드로 명시하고 있어 GUARDIAN_001과 동일한 방식으로 경로별 예외 처리를 추가했다(domain/location 세션에서 반영, 2026-08).
+ * `/api/care-target/arrival/**`(§4.2)·`/api/care-target/emergency/**`(§4.4)도 각각 ARRIVAL_001/
+ * EMERGENCY_001을 명시하고 있어 동일하게 추가한다(2026-08 도착 확인/긴급 연락 세션) — 이 매핑이 없으면 문서에 명시된 코드가 실제로는 절대 나가지 않는
+ * 죽은 코드가 된다(Location Phase 1에서 이미 겪은 문제, §7 참고).
  */
 @Component
 public class JwtAccessDeniedHandler implements AccessDeniedHandler {
@@ -33,6 +36,8 @@ public class JwtAccessDeniedHandler implements AccessDeniedHandler {
     private static final String GUARDIAN_PATH_PREFIX = "/api/guardian/";
     private static final String CARE_TARGET_LOCATION_SEND_PATH = "/api/care-target/location";
     private static final String CARE_TARGET_LOCATION_SHARE_PATH = "/api/care-target/share/location";
+    private static final String CARE_TARGET_ARRIVAL_PATH_PREFIX = "/api/care-target/arrival/";
+    private static final String CARE_TARGET_EMERGENCY_PATH_PREFIX = "/api/care-target/emergency/";
 
     private static final Logger log = LoggerFactory.getLogger(JwtAccessDeniedHandler.class);
 
@@ -69,6 +74,12 @@ public class JwtAccessDeniedHandler implements AccessDeniedHandler {
         }
         if (uri.equals(CARE_TARGET_LOCATION_SHARE_PATH)) {
             return ErrorCode.LOCATION_004;
+        }
+        if (uri.startsWith(CARE_TARGET_ARRIVAL_PATH_PREFIX)) {
+            return ErrorCode.ARRIVAL_001;
+        }
+        if (uri.startsWith(CARE_TARGET_EMERGENCY_PATH_PREFIX)) {
+            return ErrorCode.EMERGENCY_001;
         }
         return ErrorCode.COMMON_006;
     }
