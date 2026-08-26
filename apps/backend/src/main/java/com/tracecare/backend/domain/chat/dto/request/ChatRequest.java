@@ -9,11 +9,11 @@ import lombok.Getter;
 import lombok.extern.jackson.Jacksonized;
 
 /**
- * API_Specification.md §3.6 {@code POST /api/guardian/ai/chat}. {@code careTargetId}는 선택 — 문서에 이
- * 필드가 명시돼 있지 않고 {@code ChatHistory}도 Guardian 단위로만 저장되지만(스키마 확인, {@code ChatHistory} Javadoc 참고),
- * Guardian이 여러 CareTarget을 관리할 수 있어 "이 질문이 특정 CareTarget에 대한 것"임을 알려줄 방법이 없으면 위치 기반 질문에 답할 수 없다고
- * 판단해 선택 필드로 뒀다 — 제공되면 ACTIVE 관계를 검증하고, 없으면 CareTarget 특정 없이 일반 대화로 처리한다(근거는 결과 보고 참고). {@code
- * message} 길이 제한은 Security_Guide.md §11.5(Prompt Injection 방어 — 길이 제한)를 따른다.
+ * API_Specification.md §3.6 {@code POST /api/guardian/ai/chat}. {@code careTargetId}(CareTarget의
+ * {@code public_id})는 선택 — 제공되면 호출자가 해당 CareTarget의 ACTIVE Guardian인지 검증한 뒤 {@code
+ * ChatHistory.target_id}에 저장되고, 없으면 {@code target_id}는 {@code NULL}(일반 대화)로 저장된다. RAG 검색 범위도 이 값에
+ * 따라 CareTarget 단위로 분리된다({@code AiChatService} Javadoc 참고). {@code message} 길이 제한은
+ * Security_Guide.md §11.5(Prompt Injection 방어 — 길이 제한)를 따른다.
  */
 @Getter
 @Builder

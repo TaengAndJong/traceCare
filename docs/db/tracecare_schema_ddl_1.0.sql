@@ -220,6 +220,7 @@ COMMENT ON TABLE "NotificationHistory" IS '알림 발송/읽음/응답 이력. u
 CREATE TABLE "ChatHistory" (
     id              BIGINT GENERATED ALWAYS AS IDENTITY,
     user_id         BIGINT NOT NULL,
+    target_id       BIGINT,
     question        TEXT NOT NULL,
     answer          TEXT NOT NULL,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -227,7 +228,7 @@ CREATE TABLE "ChatHistory" (
     CONSTRAINT pk_ch PRIMARY KEY (id)
 );
 
-COMMENT ON TABLE "ChatHistory" IS 'AI Care Assistant(Gemini LLM) 대화 원문. 개인정보 삭제 요청 시 보관주기와 무관하게 즉시 삭제(§3.8, §10)';
+COMMENT ON TABLE "ChatHistory" IS 'AI Care Assistant(Gemini LLM) 대화 원문. target_id는 이 대화가 다루는 CareTarget(User) 참조 — Place와 동일한 이유로 DB 설계 당시 누락분 보완(다중 CareTarget 관리 시 대화를 구분하기 위해 필요, 2026-08 결정). 특정 CareTarget을 언급하지 않는 일반 대화는 NULL. 개인정보 삭제 요청 시 보관주기와 무관하게 즉시 삭제(§3.8, §10)';
 
 -- ---------------------------------------------------------------------
 -- 02-9. ChatEmbedding (Derived Data, 신규) — Gemini Embedding 벡터 저장
@@ -352,10 +353,14 @@ ALTER TABLE "NotificationHistory"
         REFERENCES "User" (id) ON DELETE RESTRICT ON UPDATE NO ACTION;
 
 -- ---------------------------------------------------------------------
--- ChatHistory → User (user_id)
+-- ChatHistory → User (user_id: 대화 소유 Guardian, target_id: 대화가 다루는 CareTarget)
 -- ---------------------------------------------------------------------
 ALTER TABLE "ChatHistory"
     ADD CONSTRAINT fk_ch_user FOREIGN KEY (user_id)
+        REFERENCES "User" (id) ON DELETE RESTRICT ON UPDATE NO ACTION;
+
+ALTER TABLE "ChatHistory"
+    ADD CONSTRAINT fk_ch_target FOREIGN KEY (target_id)
         REFERENCES "User" (id) ON DELETE RESTRICT ON UPDATE NO ACTION;
 
 -- ---------------------------------------------------------------------
@@ -478,8 +483,14 @@ CREATE INDEX idx_nh_event
 -- ---------------------------------------------------------------------
 -- ChatHistory
 -- ---------------------------------------------------------------------
-CREATE INDEX idx_ch_user_created
-    ON "ChatHistory" (user_id, created_at DESC);
+-- [변경] idx_ch_user_created → idx_ch_user_target_created (2026-08 target_id 추가에 맞춰 재설계).
+-- RAG 검색이 항상 (user_id, target_id) 조합으로 대화를 필터링하므로(같은 CareTarget 대화끼리만 묶임,
+-- target_id가 없는 일반 대화는 target_id IS NULL로 별도 취급) 그 조합을 그대로 선두 컬럼에 반영한다.
+-- target_id는 nullable이지만 일반 컬럼 채로 두면 NULL도 인덱스에 포함되어(Partial Index가 아님)
+-- "target_id IS NULL" 조건도 동일 인덱스로 커버된다. user_id 단독 조회(과거 idx_ch_user_created의
+-- 용도)도 선두 컬럼 Prefix로 계속 지원된다.
+CREATE INDEX idx_ch_user_target_created
+    ON "ChatHistory" (user_id, target_id, created_at DESC);
 
 -- ChatEmbedding.chat_history_id는 uq_ce_chat_history_id UNIQUE 제약으로 이미
 -- 인덱스가 자동 생성되므로 별도 FK 인덱스 불필요.

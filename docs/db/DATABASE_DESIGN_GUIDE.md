@@ -265,7 +265,8 @@ target_id·is_retry 추가는 새로운 결정이 아니라 원 기획서에 이
 | 컬럼 | 타입 | NULL | 기본값 | 설명 |
 |---|---|---|---|---|
 | id | BIGINT (IDENTITY) | NOT NULL | — | PK |
-| user_id | BIGINT | NOT NULL | — | User 참조 |
+| user_id | BIGINT | NOT NULL | — | 대화 소유 Guardian(User) 참조 |
+| target_id | BIGINT | NULL | — | 이 대화가 다루는 CareTarget(User) 참조. 특정 CareTarget을 언급하지 않는 일반 대화는 NULL — Place와 동일한 이유로 설계 당시 누락분 보완(2026-08) |
 | question | TEXT | NOT NULL | — | 질문 원문 |
 | answer | TEXT | NOT NULL | — | 답변 원문 |
 | created_at | TIMESTAMPTZ | NOT NULL | CURRENT_TIMESTAMP | 대화 생성 시각 |
@@ -304,7 +305,7 @@ target_id·is_retry 추가는 새로운 결정이 아니라 원 기획서에 이
 | VisitHistory | id | user_id, place_id | User(id), Place(id) |
 | PredictionHistory | id | user_id | User(id) |
 | NotificationHistory | id | user_id, target_id | User(id), User(id) |
-| ChatHistory | id | user_id | User(id) |
+| ChatHistory | id | user_id, target_id | User(id), User(id) |
 | ChatEmbedding | id | chat_history_id | ChatHistory(id) |
 | ArrivalHistory | id | user_id, place_id | User(id), Place(id) |
 
@@ -410,7 +411,8 @@ GuardianTarget 카디널리티 및 Place 등록 권한 범위는 이전 [결정 
 | PredictionHistory → User | RESTRICT | NO ACTION | 위와 동일 |
 | NotificationHistory → User(수신자, user_id) | RESTRICT | NO ACTION | 위와 동일 |
 | NotificationHistory → User(보호대상자, target_id) | RESTRICT | NO ACTION | 동일 이유. target_id는 §14 항목 3 결정으로 신규 추가된 컬럼 |
-| ChatHistory → User | RESTRICT | NO ACTION | 위와 동일. 단 개인정보 삭제 요청 시 애플리케이션이 즉시 삭제 처리 |
+| ChatHistory → User(대화 소유 Guardian, user_id) | RESTRICT | NO ACTION | 위와 동일. 단 개인정보 삭제 요청 시 애플리케이션이 즉시 삭제 처리 |
+| ChatHistory → User(대화가 다루는 CareTarget, target_id) | RESTRICT | NO ACTION | 동일 이유. target_id는 Place와 동일한 이유로 신규 추가된 컬럼(2026-08) |
 | ChatEmbedding → ChatHistory | CASCADE | NO ACTION | 1:1 파생 데이터, 원본 삭제 시 함께 삭제되는 것이 자연스러움 |
 
 모든 FK의 ON UPDATE는 NO ACTION(기본값)을 유지한다 — PK 값은 애플리케이션에서 변경되지 않는 값이므로 CASCADE가 불필요하다.
@@ -458,7 +460,7 @@ GuardianTarget 카디널리티 및 Place 등록 권한 범위는 이전 [결정 
 | NotificationHistory | idx_nh_user_sent | (user_id, sent_at DESC) | Composite B-Tree | 알림 목록 시간순 조회 |
 | NotificationHistory | idx_nh_target_sent (신규) | (target_id, sent_at DESC) | Composite B-Tree | 특정 CareTarget에 대한 알림 이력 조회 (§14 항목 3 결정 반영) |
 | NotificationHistory | idx_nh_event (신규) | event_id | B-Tree | 동일 이벤트로 발송된 다른 Guardian 수신 행 조회 (§14 항목 12 결정 반영) |
-| ChatHistory | idx_ch_user_created | (user_id, created_at DESC) | Composite B-Tree | 대화 이력 조회 |
+| ChatHistory | idx_ch_user_target_created | (user_id, target_id, created_at DESC) | Composite B-Tree | 대화 이력 조회 + RAG 검색 시 (user_id, target_id) 필터링(2026-08 target_id 추가로 idx_ch_user_created에서 재설계) |
 | ChatEmbedding | idx_chat_embedding_hnsw | embedding | HNSW (vector_cosine_ops) | 유사 질문 벡터 검색 (RAG) |
 | ArrivalHistory | idx_ah_user_confirmed (신규) | (user_id, confirmed_at DESC) | Composite B-Tree | 도착 확인 이력 조회 (2026-08 도착 확인/긴급 연락 세션) |
 | ArrivalHistory | idx_ah_place (신규) | place_id | B-Tree | FK 대상 컬럼 — place_id가 NOT NULL이라 idx_vh_place와 달리 Partial이 아니다 |
@@ -588,6 +590,7 @@ VECTOR(n)의 차원과 Gemini 무료 사용량 한도는 직접적 관계가 없
 | NotificationHistory 저장 항목 | user_id만 존재 | target_id(보호 대상자 ID) 컬럼 추가 | 원 기획서 "알림 이력 관리" 절에 이미 명시된 저장 항목("사용자 ID", "보호 대상자 ID")의 반영 누락 보완 — §14 항목 3 |
 | NotificationHistory.type | 자유 문자열, 값 목록 미정 | CHECK로 7종 최종 확정 (ARRIVAL/ARRIVAL_CONFIRM_REQUEST/ARRIVAL_CONFIRMED/EMERGENCY/AI_ANOMALY/AI_PREDICTION/AI_WEEKLY_REPORT) | 원 기획서 GeoFence 상세 시나리오까지 정밀 재검토해 "확인 완료 알림"(ARRIVAL_CONFIRMED) 유형을 추가 발견, 최종 확정 |
 | NotificationHistory 재발송 여부 | 컬럼 없음 | is_retry(BOOLEAN) 컬럼 추가 | 원 기획서 "알림 이력 관리" 저장 항목에 명시된 "재발송 여부"의 반영 누락 보완, "재알림"을 별도 type이 아닌 플래그로 처리 |
+| ChatHistory CareTarget 구분 | target_id 없음 (Guardian 단위로만 대화 저장) | target_id(nullable BIGINT) 컬럼 추가, User(id) 참조 | Place.target_id와 동일한 종류의 DB 설계 당시 누락 — Guardian이 여러 CareTarget을 관리할 때 대화·RAG 검색 범위를 CareTarget 단위로 구분하지 못하는 문제를 바로잡음(2026-08) |
 | GuardianTarget 관계 생성 절차 | 명시 없음 (직접 등록으로 암묵 가정) | 초대(Invitation) + CareTarget 승인 절차로만 생성, Redis TTL 토큰 기반, PostgreSQL 테이블 없음 | CareTarget 동의 없이 관계가 생성되는 것을 방지, email/OAuth 전원 필수 정책과 정합 |
 | NotificationHistory 다인 발송 그룹핑 | 없음 (다중 Guardian 개념 자체가 원 기획서에 없음) | event_id(UUID) 컬럼 추가 | 동일 이벤트로 여러 Guardian에게 개별 발송되는 행을 정확히 상관관계 지정 — §14 항목 12 |
 | 이력 테이블 보관 기간 | 범위로만 제시(가이드), 원 기획서엔 없음 | LocationHistory 6개월/VisitHistory 1년/PredictionHistory 6개월/NotificationHistory 1년/ChatHistory 1년 (잠정) | 가이드 제시 범위 내 최솟값 채택 — 개인정보 최소보관 원칙에 부합, 법무 검토 시 재조정 — §14 항목 4 |

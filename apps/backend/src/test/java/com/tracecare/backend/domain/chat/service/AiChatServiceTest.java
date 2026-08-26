@@ -67,10 +67,10 @@ class AiChatServiceTest {
     void chat_withoutCareTargetId_skipsRelationCheck() {
         // given
         when(embeddingClient.embed(anyString())).thenReturn(new float[] {0.1f});
-        when(chatEmbeddingStore.findSimilar(eq(GUARDIAN_ID), any(), anyInt()))
+        when(chatEmbeddingStore.findSimilar(eq(GUARDIAN_ID), eq(null), any(), anyInt()))
                 .thenReturn(List.of());
         when(llmClient.generateAnswer(anyString(), any())).thenReturn("테스트 답변");
-        ChatHistory saved = ChatHistory.create(GUARDIAN_ID, "테스트 질문", "테스트 답변");
+        ChatHistory saved = ChatHistory.create(GUARDIAN_ID, null, "테스트 질문", "테스트 답변");
         when(chatHistoryRepository.save(any(ChatHistory.class))).thenReturn(saved);
 
         ChatRequest request = ChatRequest.builder().message("테스트 질문").build();
@@ -83,6 +83,37 @@ class AiChatServiceTest {
         verify(guardianTargetRepository, never())
                 .findByGuardianIdAndTargetIdAndStatus(anyLong(), anyLong(), anyString());
         verify(chatEmbeddingStore).save(eq(saved.getId()), any(float[].class));
+    }
+
+    @Test
+    @DisplayName("careTargetId가 있고 ACTIVE 관계가 있으면 그 target_id로 저장하고 같은 target_id로만 RAG 검색한다")
+    void chat_withActiveCareTarget_scopesStorageAndSearchToTarget() {
+        // given
+        UUID targetPublicId = UUID.randomUUID();
+        User target = mockUserWithId(TARGET_ID);
+        when(userRepository.findByPublicId(targetPublicId)).thenReturn(Optional.of(target));
+        when(guardianTargetRepository.findByGuardianIdAndTargetIdAndStatus(
+                        GUARDIAN_ID, TARGET_ID, GuardianTarget.STATUS_ACTIVE))
+                .thenReturn(Optional.of(org.mockito.Mockito.mock(GuardianTarget.class)));
+        when(embeddingClient.embed(anyString())).thenReturn(new float[] {0.1f});
+        when(chatEmbeddingStore.findSimilar(eq(GUARDIAN_ID), eq(TARGET_ID), any(), anyInt()))
+                .thenReturn(List.of());
+        when(llmClient.generateAnswer(anyString(), any())).thenReturn("아이 답변");
+        ChatHistory saved = ChatHistory.create(GUARDIAN_ID, TARGET_ID, "우리 애 지금 어디야", "아이 답변");
+        when(chatHistoryRepository.save(any(ChatHistory.class))).thenReturn(saved);
+
+        ChatRequest request =
+                ChatRequest.builder()
+                        .message("우리 애 지금 어디야")
+                        .careTargetId(targetPublicId.toString())
+                        .build();
+
+        // when
+        ChatResponse response = service().chat(GUARDIAN_ID, request);
+
+        // then
+        assertThat(response.getAnswer()).isEqualTo("아이 답변");
+        verify(chatEmbeddingStore).findSimilar(eq(GUARDIAN_ID), eq(TARGET_ID), any(), anyInt());
     }
 
     @Test
@@ -121,7 +152,7 @@ class AiChatServiceTest {
                 .thenThrow(new RuntimeException("embedding down"));
         when(llmClient.generateAnswer(anyString(), eq(List.of(new LlmClient.Turn("user", "질문")))))
                 .thenReturn("답변");
-        ChatHistory saved = ChatHistory.create(GUARDIAN_ID, "질문", "답변");
+        ChatHistory saved = ChatHistory.create(GUARDIAN_ID, null, "질문", "답변");
         when(chatHistoryRepository.save(any(ChatHistory.class))).thenReturn(saved);
 
         ChatRequest request = ChatRequest.builder().message("질문").build();
@@ -141,10 +172,10 @@ class AiChatServiceTest {
         when(embeddingClient.embed(anyString()))
                 .thenReturn(new float[] {0.1f})
                 .thenThrow(new RuntimeException("embedding down"));
-        when(chatEmbeddingStore.findSimilar(eq(GUARDIAN_ID), any(), anyInt()))
+        when(chatEmbeddingStore.findSimilar(eq(GUARDIAN_ID), eq(null), any(), anyInt()))
                 .thenReturn(List.of());
         when(llmClient.generateAnswer(anyString(), any())).thenReturn("답변2");
-        ChatHistory saved = ChatHistory.create(GUARDIAN_ID, "질문2", "답변2");
+        ChatHistory saved = ChatHistory.create(GUARDIAN_ID, null, "질문2", "답변2");
         when(chatHistoryRepository.save(any(ChatHistory.class))).thenReturn(saved);
 
         ChatRequest request = ChatRequest.builder().message("질문2").build();

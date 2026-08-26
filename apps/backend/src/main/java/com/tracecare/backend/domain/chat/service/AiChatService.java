@@ -34,6 +34,11 @@ import com.tracecare.backend.domain.guardian.repository.GuardianTargetRepository
  * <p><b>RAG 검색 상위 개수(4개)</b>: 문서에 근거가 없어 자체 결정 — 3~5개 권장 범위(과제 지시)의 중간값을 택했다. 너무 적으면 관련 맥락을 놓치고, 너무
  * 많으면 프롬프트 토큰 비용과 무료 티어 한도 소진 속도가 늘어난다.
  *
+ * <p><b>CareTarget 단위 검색 범위 분리(2026-08, {@code ChatHistory.target_id} 추가)</b>: {@code
+ * careTargetId}가 있는 요청은 같은 {@code target_id}를 가진 과거 대화만 검색 대상으로 하고, 없는 요청은 {@code target_id IS
+ * NULL}인 일반 대화만 검색한다 — 서로 섞지 않는다. 일반 대화를 특정 CareTarget 검색에 함께 포함하는 대안도 검토했으나, 일반 대화(위치와 무관한 잡담 등)와
+ * 특정 대상 대화(그 아이/부모의 위치·이동 패턴)는 성격이 달라 섞으면 오히려 관련 없는 맥락이 LLM에 전달될 위험이 커진다고 판단해 완전히 분리했다.
+ *
  * <p><b>Embedding 실패 허용</b>: 검색용 질문 Embedding이 실패해도(§11.3.1 "ChatEmbedding 0개는 정상") 검색 결과 없이 그대로
  * LLM을 호출한다 — RAG는 부가 기능이라 이것 때문에 전체 대화 자체를 막지 않는다. 저장 후 생성하는 Embedding도 동일 원칙 (실패해도 {@code
  * ChatHistory} 저장은 이미 끝난 뒤라 대화 자체는 남는다).
@@ -77,13 +82,15 @@ public class AiChatService {
 
     @Transactional
     public ChatResponse chat(Long guardianId, ChatRequest request) {
+        Long targetId = null;
         if (request.getCareTargetId() != null) {
-            assertActiveRelation(guardianId, resolveTargetId(request.getCareTargetId()));
+            targetId = resolveTargetId(request.getCareTargetId());
+            assertActiveRelation(guardianId, targetId);
         }
 
         List<LlmClient.Turn> turns = new ArrayList<>();
         for (ChatEmbeddingStore.PastExchange exchange :
-                searchSimilarSafely(guardianId, request.getMessage())) {
+                searchSimilarSafely(guardianId, targetId, request.getMessage())) {
             turns.add(new LlmClient.Turn("user", exchange.question()));
             turns.add(new LlmClient.Turn("model", exchange.answer()));
         }
@@ -93,7 +100,7 @@ public class AiChatService {
 
         ChatHistory saved =
                 chatHistoryRepository.save(
-                        ChatHistory.create(guardianId, request.getMessage(), answer));
+                        ChatHistory.create(guardianId, targetId, request.getMessage(), answer));
         embedAndStoreSafely(saved);
 
         return ChatResponse.builder().chatId(saved.getId()).answer(answer).build();
@@ -114,10 +121,10 @@ public class AiChatService {
     }
 
     private List<ChatEmbeddingStore.PastExchange> searchSimilarSafely(
-            Long guardianId, String message) {
+            Long guardianId, Long targetId, String message) {
         try {
             float[] queryEmbedding = embeddingClient.embed(message);
-            return chatEmbeddingStore.findSimilar(guardianId, queryEmbedding, TOP_N);
+            return chatEmbeddingStore.findSimilar(guardianId, targetId, queryEmbedding, TOP_N);
         } catch (RuntimeException e) {
             log.warn("event=AI_CHAT_RAG_SEARCH_SKIPPED, guardianId={}", guardianId, e);
             return List.of();

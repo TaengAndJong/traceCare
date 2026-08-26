@@ -226,7 +226,16 @@ VisitHistory 기준(가공된 "방문 단위" 데이터). 원본 GPS 좌표 나�
 | POST | `/api/guardian/ai/explain` | 이상행동 설명 |
 | POST | `/api/guardian/ai/search` | 자연어 이동기록 검색 |
 
-성공 코드: `AI_001` · 주요 실패 코드: `AI_002`(500, LLM API 호출 실패), `AI_004`(429, LLM 호출 한도 초과)
+| 구분 | 필드 | 타입 | 설명 |
+|---|---|---|---|
+| Request(`/chat`, 바디) | `message` | string | 질문 원문(최대 500자) |
+| Request(`/chat`, 바디) | `careTargetId` | string(UUID), nullable | 이 질문이 다루는 CareTarget의 `public_id`. 생략하면 특정 CareTarget에 국한되지 않는 일반 대화로 처리되고, 값이 있으면 해당 CareTarget에 대한 대화로 저장·검색 범위가 한정된다(관계 미매핑 시 `TARGET_002`, 2026-08 `ChatHistory.target_id` 추가로 반영). |
+| Response(`/chat`) | `chatId` | number | 저장된 `ChatHistory` 내부 PK |
+| Response(`/chat`) | `answer` | string | LLM 응답 원문 |
+
+`careTargetId`는 서버가 질문 내용을 분석해서 자동으로 판단하지 않는다. Frontend가 특정 CareTarget에 대한 대화 화면(맥락)에서 질문을 보낼 때는 반드시 이 필드를 채워야 하며, 채우지 않으면 해당 대화는 일반 대화로 저장되어 이후 그 CareTarget에 대한 대화 검색(RAG)에 포함되지 않는다. 범용/비특정 대화 화면에서는 생략한다.
+
+성공 코드: `AI_001` · 주요 실패 코드: `AI_002`(500, LLM API 호출 실패), `AI_004`(429, LLM 호출 한도 초과), `TARGET_002`(403, `careTargetId` 관계 미매핑)
 
 ### 3.7 알림
 
