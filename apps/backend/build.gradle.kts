@@ -29,6 +29,10 @@ repositories {
 val jjwtVersion = "0.12.6"
 val googleApiClientVersion = "2.9.0"
 val googleHttpClientGsonVersion = "2.1.0"
+// AI 케어 비서(Gemini 실연동, 2026-08). google-genai는 Gemini Developer API 공식 Java SDK(GA, 2025-05),
+// pgvector는 ChatEmbedding.embedding(VECTOR(768)) 컬럼을 raw JDBC로 읽고 쓰기 위한 공식 JDBC 확장이다.
+val googleGenAiVersion = "1.68.0"
+val pgvectorVersion = "0.1.6"
 // 이 개발 환경(Windows, 최신 Docker Desktop/Engine)에서 1.20.4에 내장된 구버전 docker-java 클라이언트가
 // Docker API 버전 협상에 실패해 Testcontainers가 데몬을 못 찾는 문제가 있어 2.x로 올렸다(사용자 확인 완료).
 val testcontainersVersion = "2.0.5"
@@ -49,6 +53,8 @@ dependencies {
 
     implementation("com.google.api-client:google-api-client:$googleApiClientVersion")
     implementation("com.google.http-client:google-http-client-gson:$googleHttpClientGsonVersion")
+    implementation("com.google.genai:google-genai:$googleGenAiVersion")
+    implementation("com.pgvector:pgvector:$pgvectorVersion")
 
     compileOnly("org.projectlombok:lombok:1.18.34")
     annotationProcessor("org.projectlombok:lombok:1.18.34")

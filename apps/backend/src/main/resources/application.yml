@@ -34,6 +34,9 @@ jwt:
 google:
   client-id: ${GOOGLE_CLIENT_ID}
 
+gemini:
+  api-key: ${GEMINI_API_KEY}
+
 guardian:
   # DATABASE_DESIGN_GUIDE.md §13/§14 확정: 하드 상한 없음, 애플리케이션 소프트 상한(설정값 관리)
   care-target-limit: ${GUARDIAN_CARE_TARGET_LIMIT:10}

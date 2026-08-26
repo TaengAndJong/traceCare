@@ -641,7 +641,7 @@ public Message<?> preSend(Message<?> message, MessageChannel channel) {
 | 위험 | 대응 |
 |---|---|
 | 통신 구간 평문 노출 | 전 구간 HTTPS 강제(Nginx Reverse Proxy에서 TLS Termination, HTTP→HTTPS 리다이렉트) |
-| 민감 설정값 노출 | JWT Secret, Google Client Secret, LLM API Key 등은 환경 변수/Secret Manager로 관리(5.1) |
+| 민감 설정값 노출 | JWT Secret, Google Client Secret, LLM API Key(Gemini `GEMINI_API_KEY` 포함, 2026-08 AI 케어 비서 세션) 등은 환경 변수/Secret Manager로 관리(5.1) |
 | 비밀번호 저장 | 이 프로젝트는 Google OAuth2 전용 로그인이므로 자체 비밀번호를 저장하지 않는 것이 원칙. 향후 로컬 계정 방식을 추가할 경우 `BCryptPasswordEncoder`(work factor 10 이상)로 해시 저장, 평문/양방향 암호화 저장 금지 |
 | 저장 데이터 암호화 | 위치 이력 등 민감 데이터는 DB 접근 통제(권한 분리)와 함께, 필요 시 컬럼 단위 암호화 적용을 검토 |
 
