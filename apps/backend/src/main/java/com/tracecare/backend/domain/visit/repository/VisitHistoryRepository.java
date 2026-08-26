@@ -1,11 +1,14 @@
 package com.tracecare.backend.domain.visit.repository;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import com.tracecare.backend.domain.visit.entity.VisitHistory;
 
@@ -24,4 +27,23 @@ public interface VisitHistoryRepository extends JpaRepository<VisitHistory, Long
 
     Page<VisitHistory> findByUserIdAndPlaceIdOrderByArrivalTimeDesc(
             Long userId, Long placeId, Pageable pageable);
+
+    /** AI 방문 예측 Stub(StubAiPredictionClient)이 "학습 데이터 충분한지" 판단하는 기준으로 쓴다. */
+    long countByUserId(Long userId);
+
+    /**
+     * 등록 장소 방문만 대상으로 방문 빈도 상위 N개를 집계한다 — 진짜 ML은 아니지만 "가장 많이 방문한 장소일수록 오늘도 갈 확률이 높다"는 단순 규칙으로 AI 예측을
+     * 흉내 낸다(StubAiPredictionClient 참고). {@code Pageable}로 상위 N개만 제한한다.
+     */
+    @Query(
+            "SELECT v.placeName AS placeName, COUNT(v) AS visitCount FROM VisitHistory v "
+                    + "WHERE v.userId = :userId AND v.registeredPlace = true "
+                    + "GROUP BY v.placeName ORDER BY COUNT(v) DESC")
+    List<PlaceFrequency> findTopVisitedPlaces(@Param("userId") Long userId, Pageable pageable);
+
+    interface PlaceFrequency {
+        String getPlaceName();
+
+        Long getVisitCount();
+    }
 }

@@ -48,6 +48,11 @@ public class RedisConfig {
      * 패키지({@code com.tracecare.backend})와, 실제로 캐시 값에 등장하는 JDK 타입(java.time.Instant,
      * java.util.ArrayList, java.lang.Long 등 — 직접 캐시된 값을 덤프해 확인)으로만 제한한다. 화이트리스트 밖 클래스명이 `@class`에
      * 들어오면 역직렬화 자체를 거부한다.
+     *
+     * <p><b>발견/수정(2026-08, AI 예측 도메인 세션)</b>: {@code java.math.}가 화이트리스트에 없어, {@code BigDecimal}
+     * 필드(AI 예측 확률 등)를 담은 값을 캐시에 쓴 뒤 다시 읽으면 항상 {@code SerializationException}으로 거부되고 있었다 — 처음
+     * 화이트리스트를 만들 때 그 시점까지 캐시된 값에는 {@code BigDecimal} 필드가 없어 놓쳤던 케이스다. Place 같은 좌표/반경 필드도 서비스 계층에서
+     * {@code Double}로 변환해 캐시하고 있어 지금까지 드러나지 않았다.
      */
     private ObjectMapper redisObjectMapper() {
         PolymorphicTypeValidator polymorphicTypeValidator =
@@ -56,6 +61,7 @@ public class RedisConfig {
                         .allowIfSubType("java.time.")
                         .allowIfSubType("java.util.")
                         .allowIfSubType("java.lang.")
+                        .allowIfSubType("java.math.")
                         .build();
 
         ObjectMapper objectMapper = new ObjectMapper();
