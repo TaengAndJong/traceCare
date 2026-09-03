@@ -11,6 +11,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -23,17 +25,25 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.tracecare.backend.common.exception.ErrorCode;
 import com.tracecare.backend.common.exception.auth.AccessDeniedCustomException;
+import com.tracecare.backend.common.exception.business.VisitHistoryNotFoundException;
+import com.tracecare.backend.common.exception.validation.InvalidRequestException;
 import com.tracecare.backend.domain.auth.entity.User;
 import com.tracecare.backend.domain.auth.repository.UserRepository;
 import com.tracecare.backend.domain.chat.client.EmbeddingClient;
 import com.tracecare.backend.domain.chat.client.LlmClient;
 import com.tracecare.backend.domain.chat.dto.request.ChatRequest;
+import com.tracecare.backend.domain.chat.dto.request.SearchRequest;
+import com.tracecare.backend.domain.chat.dto.request.SummaryRequest;
 import com.tracecare.backend.domain.chat.dto.response.ChatResponse;
+import com.tracecare.backend.domain.chat.dto.response.SearchResponse;
+import com.tracecare.backend.domain.chat.dto.response.SummaryResponse;
 import com.tracecare.backend.domain.chat.entity.ChatHistory;
 import com.tracecare.backend.domain.chat.repository.ChatEmbeddingStore;
 import com.tracecare.backend.domain.chat.repository.ChatHistoryRepository;
 import com.tracecare.backend.domain.guardian.entity.GuardianTarget;
 import com.tracecare.backend.domain.guardian.repository.GuardianTargetRepository;
+import com.tracecare.backend.domain.visit.entity.VisitHistory;
+import com.tracecare.backend.domain.visit.repository.VisitHistoryRepository;
 
 /**
  * AiChatService는 실제 Gemini를 호출하지 않는다 — {@link LlmClient}/{@link EmbeddingClient}를 전부 Mock으로 대체한다(이번
@@ -51,6 +61,7 @@ class AiChatServiceTest {
     @Mock private ChatEmbeddingStore chatEmbeddingStore;
     @Mock private EmbeddingClient embeddingClient;
     @Mock private LlmClient llmClient;
+    @Mock private VisitHistoryRepository visitHistoryRepository;
 
     private AiChatService service() {
         return new AiChatService(
@@ -59,7 +70,26 @@ class AiChatServiceTest {
                 chatHistoryRepository,
                 chatEmbeddingStore,
                 embeddingClient,
-                llmClient);
+                llmClient,
+                visitHistoryRepository);
+    }
+
+    private void stubActiveTarget(UUID targetPublicId) {
+        User target = mockUserWithId(TARGET_ID);
+        when(userRepository.findByPublicId(targetPublicId)).thenReturn(Optional.of(target));
+        when(guardianTargetRepository.findByGuardianIdAndTargetIdAndStatus(
+                        GUARDIAN_ID, TARGET_ID, GuardianTarget.STATUS_ACTIVE))
+                .thenReturn(Optional.of(org.mockito.Mockito.mock(GuardianTarget.class)));
+    }
+
+    private VisitHistory visit(String placeName, Instant arrival, Instant departure) {
+        VisitHistory v =
+                VisitHistory.arrive(
+                        TARGET_ID, 10L, placeName, BigDecimal.ONE, BigDecimal.ONE, arrival);
+        if (departure != null) {
+            v.depart(departure);
+        }
+        return v;
     }
 
     @Test
@@ -192,5 +222,152 @@ class AiChatServiceTest {
         User user = org.mockito.Mockito.mock(User.class);
         when(user.getId()).thenReturn(id);
         return user;
+    }
+
+    @Test
+    @DisplayName("summary — 기간 내 방문 이력이 있으면 요약을 생성하고 visitCount를 함께 반환한다")
+    void summarize_returnsAnswerAndVisitCount_whenVisitsExist() {
+        UUID targetPublicId = UUID.randomUUID();
+        stubActiveTarget(targetPublicId);
+        Instant from = Instant.parse("2026-08-01T00:00:00Z");
+        Instant to = Instant.parse("2026-08-31T00:00:00Z");
+        List<VisitHistory> visits =
+                List.of(
+                        visit("놀이터", from.plusSeconds(3600), from.plusSeconds(7200)),
+                        visit("집", from.plusSeconds(10000), from.plusSeconds(20000)));
+        when(visitHistoryRepository.findByUserIdAndArrivalTimeBetweenOrderByArrivalTimeDesc(
+                        TARGET_ID, from, to))
+                .thenReturn(visits);
+        when(llmClient.generateAnswer(anyString(), any())).thenReturn("이번 달 요약입니다");
+
+        SummaryResponse response =
+                service()
+                        .summarize(
+                                GUARDIAN_ID,
+                                SummaryRequest.builder()
+                                        .careTargetId(targetPublicId.toString())
+                                        .from(from)
+                                        .to(to)
+                                        .build());
+
+        assertThat(response.getAnswer()).isEqualTo("이번 달 요약입니다");
+        assertThat(response.getVisitCount()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("summary — 기간 내 방문 이력이 없으면 VISIT_001을 던지고 LLM을 호출하지 않는다")
+    void summarize_throwsVisitHistoryNotFound_whenNoVisitsInPeriod() {
+        UUID targetPublicId = UUID.randomUUID();
+        stubActiveTarget(targetPublicId);
+        Instant from = Instant.parse("2026-08-01T00:00:00Z");
+        Instant to = Instant.parse("2026-08-31T00:00:00Z");
+        when(visitHistoryRepository.findByUserIdAndArrivalTimeBetweenOrderByArrivalTimeDesc(
+                        TARGET_ID, from, to))
+                .thenReturn(List.of());
+
+        assertThatThrownBy(
+                        () ->
+                                service()
+                                        .summarize(
+                                                GUARDIAN_ID,
+                                                SummaryRequest.builder()
+                                                        .careTargetId(targetPublicId.toString())
+                                                        .from(from)
+                                                        .to(to)
+                                                        .build()))
+                .isInstanceOf(VisitHistoryNotFoundException.class);
+        verify(llmClient, never()).generateAnswer(anyString(), any());
+    }
+
+    @Test
+    @DisplayName("summary — from이 to보다 이후면 COMMON_002로 거부한다")
+    void summarize_throwsInvalidRequest_whenFromAfterTo() {
+        UUID targetPublicId = UUID.randomUUID();
+        stubActiveTarget(targetPublicId);
+        Instant from = Instant.parse("2026-08-31T00:00:00Z");
+        Instant to = Instant.parse("2026-08-01T00:00:00Z");
+
+        assertThatThrownBy(
+                        () ->
+                                service()
+                                        .summarize(
+                                                GUARDIAN_ID,
+                                                SummaryRequest.builder()
+                                                        .careTargetId(targetPublicId.toString())
+                                                        .from(from)
+                                                        .to(to)
+                                                        .build()))
+                .isInstanceOf(InvalidRequestException.class)
+                .satisfies(
+                        e ->
+                                assertThat(((InvalidRequestException) e).getErrorCode())
+                                        .isEqualTo(ErrorCode.COMMON_002));
+        verify(llmClient, never()).generateAnswer(anyString(), any());
+    }
+
+    @Test
+    @DisplayName("search — 대상에 방문 이력이 있으면 기간 내 후보를 근거로 LLM이 답한다")
+    void search_returnsAnswer_whenCandidatesExist() {
+        UUID targetPublicId = UUID.randomUUID();
+        stubActiveTarget(targetPublicId);
+        when(visitHistoryRepository.countByUserId(TARGET_ID)).thenReturn(5L);
+        when(visitHistoryRepository.findByUserIdAndArrivalTimeBetweenOrderByArrivalTimeDesc(
+                        eq(TARGET_ID), any(), any()))
+                .thenReturn(List.of(visit("놀이터", Instant.now(), Instant.now())));
+        when(llmClient.generateAnswer(anyString(), any())).thenReturn("네, 놀이터에 다녀왔어요");
+
+        SearchResponse response =
+                service()
+                        .search(
+                                GUARDIAN_ID,
+                                SearchRequest.builder()
+                                        .careTargetId(targetPublicId.toString())
+                                        .query("오늘 놀이터 갔었나요?")
+                                        .build());
+
+        assertThat(response.getAnswer()).isEqualTo("네, 놀이터에 다녀왔어요");
+    }
+
+    @Test
+    @DisplayName("search — 대상에 방문 이력이 아예 없으면 VISIT_001을 던지고 LLM을 호출하지 않는다")
+    void search_throwsVisitHistoryNotFound_whenTargetHasNoHistoryAtAll() {
+        UUID targetPublicId = UUID.randomUUID();
+        stubActiveTarget(targetPublicId);
+        when(visitHistoryRepository.countByUserId(TARGET_ID)).thenReturn(0L);
+
+        assertThatThrownBy(
+                        () ->
+                                service()
+                                        .search(
+                                                GUARDIAN_ID,
+                                                SearchRequest.builder()
+                                                        .careTargetId(targetPublicId.toString())
+                                                        .query("놀이터 갔었나요?")
+                                                        .build()))
+                .isInstanceOf(VisitHistoryNotFoundException.class);
+        verify(llmClient, never()).generateAnswer(anyString(), any());
+    }
+
+    @Test
+    @DisplayName("search — 해당 기간 후보가 없어도(전체 이력은 있음) 에러 대신 LLM이 자연어로 답하게 한다")
+    void search_stillCallsLlm_whenWindowHasNoCandidatesButTargetHasHistory() {
+        UUID targetPublicId = UUID.randomUUID();
+        stubActiveTarget(targetPublicId);
+        when(visitHistoryRepository.countByUserId(TARGET_ID)).thenReturn(3L);
+        when(visitHistoryRepository.findByUserIdAndArrivalTimeBetweenOrderByArrivalTimeDesc(
+                        eq(TARGET_ID), any(), any()))
+                .thenReturn(List.of());
+        when(llmClient.generateAnswer(anyString(), any())).thenReturn("그런 방문 기록을 찾지 못했어요");
+
+        SearchResponse response =
+                service()
+                        .search(
+                                GUARDIAN_ID,
+                                SearchRequest.builder()
+                                        .careTargetId(targetPublicId.toString())
+                                        .query("어제 병원 갔었나요?")
+                                        .build());
+
+        assertThat(response.getAnswer()).isEqualTo("그런 방문 기록을 찾지 못했어요");
     }
 }

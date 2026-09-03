@@ -25,6 +25,14 @@ public interface VisitHistoryRepository extends JpaRepository<VisitHistory, Long
     Page<VisitHistory> findByUserIdAndArrivalTimeBetweenOrderByArrivalTimeDesc(
             Long userId, Instant from, Instant to, Pageable pageable);
 
+    /**
+     * AI 케어 비서 이동 요약/검색(§3.6 `/summary`, `/search`)이 기간 내 방문 전체를 집계·LLM 컨텍스트로 넘기는 데 쓴다. 위 페이지 버전과
+     * 달리 페이징하지 않는 이유는, "이 기간 방문 몇 건"이라는 집계 자체가 목적이라 일부만 가져오면 집계가 틀어지기 때문이다 — 호출부( {@code
+     * AiChatService})가 자체적으로 상한(MAX_CANDIDATES)을 적용해 LLM 토큰 비용을 제어한다.
+     */
+    List<VisitHistory> findByUserIdAndArrivalTimeBetweenOrderByArrivalTimeDesc(
+            Long userId, Instant from, Instant to);
+
     Page<VisitHistory> findByUserIdAndPlaceIdOrderByArrivalTimeDesc(
             Long userId, Long placeId, Pageable pageable);
 

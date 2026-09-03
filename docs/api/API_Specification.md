@@ -235,7 +235,22 @@ VisitHistory 기준(가공된 "방문 단위" 데이터). 원본 GPS 좌표 나�
 
 `careTargetId`는 서버가 질문 내용을 분석해서 자동으로 판단하지 않는다. Frontend가 특정 CareTarget에 대한 대화 화면(맥락)에서 질문을 보낼 때는 반드시 이 필드를 채워야 하며, 채우지 않으면 해당 대화는 일반 대화로 저장되어 이후 그 CareTarget에 대한 대화 검색(RAG)에 포함되지 않는다. 범용/비특정 대화 화면에서는 생략한다.
 
-성공 코드: `AI_001` · 주요 실패 코드: `AI_002`(500, LLM API 호출 실패), `AI_004`(429, LLM 호출 한도 초과), `TARGET_002`(403, `careTargetId` 관계 미매핑)
+`/summary`(이동 요약), `/search`(자연어 이동기록 검색)는 `/chat`과 달리 `careTargetId`가 **필수**다 — 이 두 기능은 항상 특정 CareTarget의 `VisitHistory`를 대상으로 하므로 자동 판단이나 생략 개념 자체가 없다. 둘 다 원본 GPS 좌표가 아니라 이미 가공된 `VisitHistory`(장소명/시간 단위)만 근거로 사용하며, 응답은 `ChatHistory`에 저장되지 않는다(2026-08 Phase 2B 결정 — 대화 맥락과 성격이 달라 RAG 검색에 섞이지 않도록 분리, 근거는 `AiChatService` Javadoc 참고).
+
+| 구분 | 필드 | 타입 | 설명 |
+|---|---|---|---|
+| Request(`/summary`, 바디) | `careTargetId` | string(UUID) | 요약 대상 CareTarget의 `public_id`(필수) |
+| Request(`/summary`, 바디) | `from` | string(ISO-8601 Instant) | 요약 기간 시작(포함). Location Phase 1(`/api/guardian/location/history`)의 `from`/`to` 파라미터 설계와 통일 |
+| Request(`/summary`, 바디) | `to` | string(ISO-8601 Instant) | 요약 기간 끝. `from`보다 이전이면 `COMMON_002` |
+| Response(`/summary`) | `answer` | string | LLM이 생성한 이동 요약 텍스트 |
+| Response(`/summary`) | `visitCount` | number | 요약의 근거가 된 방문 건수 |
+| Request(`/search`, 바디) | `careTargetId` | string(UUID) | 검색 대상 CareTarget의 `public_id`(필수) |
+| Request(`/search`, 바디) | `query` | string | 자연어 검색어(최대 500자). "지난주"/"이번달" 등 러프한 시간 키워드를 인식해 조회 기간을 좁히고, 인식되는 키워드가 없으면 최근 90일을 기본 기간으로 검색한다 |
+| Response(`/search`) | `answer` | string | LLM이 생성한 답변 텍스트. 해당 기간에 일치하는 방문 기록이 없으면 에러가 아니라 "그런 기록이 없다"는 자연어 답변으로 응답한다 |
+
+`/summary`, `/search` 모두 대상 CareTarget에 방문 이력이 아예 없으면(요약 기간/검색 기간과 무관하게) `VISIT_001`(404)을 반환하고 LLM을 호출하지 않는다.
+
+성공 코드: `AI_001` · 주요 실패 코드: `AI_002`(500, LLM API 호출 실패), `AI_004`(429, LLM 호출 한도 초과), `TARGET_002`(403, `careTargetId` 관계 미매핑), `VISIT_001`(404, `/summary`·`/search` 대상 방문 이력 없음), `COMMON_002`(400, `careTargetId` 누락 또는 `/summary`의 `from`이 `to`보다 이후)
 
 ### 3.7 알림
 
