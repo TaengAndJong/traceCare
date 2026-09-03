@@ -4,6 +4,7 @@ import java.util.List;
 
 import com.google.genai.Client;
 import com.google.genai.errors.ApiException;
+import com.google.genai.errors.GenAiIOException;
 import com.google.genai.types.Content;
 import com.google.genai.types.GenerateContentConfig;
 import com.google.genai.types.GenerateContentResponse;
@@ -24,6 +25,18 @@ import com.tracecare.backend.common.exception.external.AiServerException;
  *
  * <p>429(호출 한도 초과)는 {@code GeminiConfig}에서 이미 SDK 자동 재시도를 껐으므로 이 클래스가 재시도하지 않고 그대로 {@code AI_004}로
  * 변환한다. 그 외 실패는 일반화된 {@code AI_002}로 통일한다(Exception_Handling_Rule.md §9.3).
+ *
+ * <p><b>{@code GenAiIOException}도 함께 잡는 이유(2026-08 버그 수정)</b>: SDK 예외 계층을 실제로 확인한 결과, {@code
+ * ApiException}(API 응답 기반 실패)과 {@code GenAiIOException}(네트워크 타임아웃 등 전송 계층 실패)은 공통 상위 클래스가 {@code
+ * BaseException}이지만 이 클래스가 SDK 내부에 package-private으로 선언돼 있어(공식 API가 아님) 외부에서 타입으로 잡을 수 없다 — 그래서
+ * {@code ApiException}만 잡던 기존 코드는 {@code GenAiIOException}을 놓쳐 일반화된 {@code COMMON_001}로 새어나갔다(실제
+ * 재현됨). 두 타입을 명시적으로 함께 잡는 것이 유일한 방법이다. {@code GenAiIOException}은 API 응답 코드 자체가 없는 순수 전송 실패라 항상
+ * {@code AI_002}로만 매핑한다(429 재시도 대상이 아님).
+ *
+ * <p><b>매핑 로직을 {@link #mapApiException}/{@link #mapIoException}으로 분리한 이유</b>: {@code Client}/{@code
+ * Models}가 SDK 쪽에서 {@code final}이라 Mockito로 흉내 내 {@code generateContent} 호출 자체를 실패시키는 단위 테스트를 만들기
+ * 어렵다(모의 객체는 생성자를 타지 않아 {@code client.models} 필드가 항상 {@code null}이 된다). 대신 예외 → {@code ErrorCode}
+ * 변환이라는, 실제로 버그가 있었던 로직만 package-private 메서드로 떼어내 SDK 없이 직접 단위 테스트한다({@code GeminiLlmClientTest}).
  */
 @Component
 public class GeminiLlmClient implements LlmClient {
@@ -63,12 +76,33 @@ public class GeminiLlmClient implements LlmClient {
             }
             return text;
         } catch (ApiException e) {
-            if (e.code() == RATE_LIMIT_STATUS) {
-                log.warn("event=GEMINI_RATE_LIMITED, code={}", e.code());
-                throw new AiServerException("gemini", ErrorCode.AI_004);
-            }
-            log.error("event=GEMINI_GENERATE_FAILED, code={}, status={}", e.code(), e.status(), e);
-            throw new AiServerException("gemini", ErrorCode.AI_002);
+            throw mapApiException(e);
+        } catch (GenAiIOException e) {
+            throw mapIoException(e);
         }
+    }
+
+    /**
+     * 429는 {@code AI_004}, 그 외 API 실패는 전부 {@code AI_002}로 통일한다(Exception_Handling_Rule.md §9.3).
+     */
+    AiServerException mapApiException(ApiException e) {
+        if (e.code() == RATE_LIMIT_STATUS) {
+            log.warn("event=GEMINI_RATE_LIMITED, code={}", e.code());
+            return new AiServerException("gemini", ErrorCode.AI_004);
+        }
+        log.error(
+                "event=GEMINI_GENERATE_FAILED, exceptionType={}, code={}, status={}",
+                e.getClass().getSimpleName(),
+                e.code(),
+                e.status(),
+                e);
+        return new AiServerException("gemini", ErrorCode.AI_002);
+    }
+
+    /** {@code GenAiIOException}은 API 응답 코드가 없는 순수 전송 실패라 항상 {@code AI_002}로만 매핑한다. */
+    AiServerException mapIoException(GenAiIOException e) {
+        log.error(
+                "event=GEMINI_GENERATE_FAILED, exceptionType={}", e.getClass().getSimpleName(), e);
+        return new AiServerException("gemini", ErrorCode.AI_002);
     }
 }

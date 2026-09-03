@@ -4,6 +4,7 @@ import java.util.List;
 
 import com.google.genai.Client;
 import com.google.genai.errors.ApiException;
+import com.google.genai.errors.GenAiIOException;
 import com.google.genai.types.ContentEmbedding;
 import com.google.genai.types.EmbedContentConfig;
 import com.google.genai.types.EmbedContentResponse;
@@ -18,6 +19,9 @@ import com.tracecare.backend.common.exception.external.AiServerException;
  * Gemini Embedding 실연동. 모델/차원은 DATABASE_DESIGN_GUIDE.md §3.9/§4.9가 이미 확정한 {@code
  * gemini-embedding-001}, 768차원을 그대로 쓴다 — 2026-08 기준 공식 모델 목록에서도 여전히 활성 상태로 확인해 (deprecated 아님) 별도
  * 변경 없이 그대로 재사용했다.
+ *
+ * <p><b>{@code GenAiIOException}도 함께 잡는 이유</b>: {@link GeminiLlmClient} Javadoc 참고 — 동일한 버그였고 동일하게
+ * 수정했다.
  */
 @Component
 public class GeminiEmbeddingClient implements EmbeddingClient {
@@ -47,12 +51,32 @@ public class GeminiEmbeddingClient implements EmbeddingClient {
             }
             return result;
         } catch (ApiException e) {
-            if (e.code() == RATE_LIMIT_STATUS) {
-                log.warn("event=GEMINI_EMBED_RATE_LIMITED, code={}", e.code());
-                throw new AiServerException("gemini", ErrorCode.AI_004);
-            }
-            log.error("event=GEMINI_EMBED_FAILED, code={}, status={}", e.code(), e.status(), e);
-            throw new AiServerException("gemini", ErrorCode.AI_002);
+            throw mapApiException(e);
+        } catch (GenAiIOException e) {
+            throw mapIoException(e);
         }
+    }
+
+    /**
+     * 429는 {@code AI_004}, 그 외 API 실패는 전부 {@code AI_002}로 통일한다(Exception_Handling_Rule.md §9.3).
+     */
+    AiServerException mapApiException(ApiException e) {
+        if (e.code() == RATE_LIMIT_STATUS) {
+            log.warn("event=GEMINI_EMBED_RATE_LIMITED, code={}", e.code());
+            return new AiServerException("gemini", ErrorCode.AI_004);
+        }
+        log.error(
+                "event=GEMINI_EMBED_FAILED, exceptionType={}, code={}, status={}",
+                e.getClass().getSimpleName(),
+                e.code(),
+                e.status(),
+                e);
+        return new AiServerException("gemini", ErrorCode.AI_002);
+    }
+
+    /** {@code GenAiIOException}은 API 응답 코드가 없는 순수 전송 실패라 항상 {@code AI_002}로만 매핑한다. */
+    AiServerException mapIoException(GenAiIOException e) {
+        log.error("event=GEMINI_EMBED_FAILED, exceptionType={}", e.getClass().getSimpleName(), e);
+        return new AiServerException("gemini", ErrorCode.AI_002);
     }
 }
