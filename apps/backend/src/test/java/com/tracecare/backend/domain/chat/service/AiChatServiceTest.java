@@ -34,6 +34,7 @@ import com.tracecare.backend.domain.chat.client.LlmClient;
 import com.tracecare.backend.domain.chat.dto.request.ChatRequest;
 import com.tracecare.backend.domain.chat.dto.request.SearchRequest;
 import com.tracecare.backend.domain.chat.dto.request.SummaryRequest;
+import com.tracecare.backend.domain.chat.dto.request.WeeklyReportRequest;
 import com.tracecare.backend.domain.chat.dto.response.ChatResponse;
 import com.tracecare.backend.domain.chat.dto.response.SearchResponse;
 import com.tracecare.backend.domain.chat.dto.response.SummaryResponse;
@@ -369,5 +370,52 @@ class AiChatServiceTest {
                                         .build());
 
         assertThat(response.getAnswer()).isEqualTo("그런 방문 기록을 찾지 못했어요");
+    }
+
+    @Test
+    @DisplayName("report/weekly — 최근 7일 내 방문 이력이 있으면 리포트를 생성하고 visitCount를 함께 반환한다")
+    void weeklyReport_returnsAnswerAndVisitCount_whenVisitsExist() {
+        UUID targetPublicId = UUID.randomUUID();
+        stubActiveTarget(targetPublicId);
+        List<VisitHistory> visits =
+                List.of(
+                        visit("놀이터", Instant.now(), Instant.now()),
+                        visit("집", Instant.now(), null));
+        when(visitHistoryRepository.findByUserIdAndArrivalTimeBetweenOrderByArrivalTimeDesc(
+                        eq(TARGET_ID), any(), any()))
+                .thenReturn(visits);
+        when(llmClient.generateAnswer(anyString(), any())).thenReturn("이번 주 리포트입니다");
+
+        SummaryResponse response =
+                service()
+                        .weeklyReport(
+                                GUARDIAN_ID,
+                                WeeklyReportRequest.builder()
+                                        .careTargetId(targetPublicId.toString())
+                                        .build());
+
+        assertThat(response.getAnswer()).isEqualTo("이번 주 리포트입니다");
+        assertThat(response.getVisitCount()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("report/weekly — 최근 7일 내 방문 이력이 없으면 VISIT_001을 던지고 LLM을 호출하지 않는다")
+    void weeklyReport_throwsVisitHistoryNotFound_whenNoVisitsInWindow() {
+        UUID targetPublicId = UUID.randomUUID();
+        stubActiveTarget(targetPublicId);
+        when(visitHistoryRepository.findByUserIdAndArrivalTimeBetweenOrderByArrivalTimeDesc(
+                        eq(TARGET_ID), any(), any()))
+                .thenReturn(List.of());
+
+        assertThatThrownBy(
+                        () ->
+                                service()
+                                        .weeklyReport(
+                                                GUARDIAN_ID,
+                                                WeeklyReportRequest.builder()
+                                                        .careTargetId(targetPublicId.toString())
+                                                        .build()))
+                .isInstanceOf(VisitHistoryNotFoundException.class);
+        verify(llmClient, never()).generateAnswer(anyString(), any());
     }
 }

@@ -13,6 +13,7 @@ import com.tracecare.backend.common.security.SecurityUtils;
 import com.tracecare.backend.domain.chat.dto.request.ChatRequest;
 import com.tracecare.backend.domain.chat.dto.request.SearchRequest;
 import com.tracecare.backend.domain.chat.dto.request.SummaryRequest;
+import com.tracecare.backend.domain.chat.dto.request.WeeklyReportRequest;
 import com.tracecare.backend.domain.chat.dto.response.ChatResponse;
 import com.tracecare.backend.domain.chat.dto.response.SearchResponse;
 import com.tracecare.backend.domain.chat.dto.response.SummaryResponse;
@@ -47,5 +48,13 @@ public class AiChatController {
         return ApiResponse.success(
                 SuccessCode.AI_001,
                 aiChatService.search(SecurityUtils.getCurrentUserId(), request));
+    }
+
+    @PostMapping("/report/weekly")
+    public ApiResponse<SummaryResponse> weeklyReport(
+            @Valid @RequestBody WeeklyReportRequest request) {
+        return ApiResponse.success(
+                SuccessCode.AI_001,
+                aiChatService.weeklyReport(SecurityUtils.getCurrentUserId(), request));
     }
 }

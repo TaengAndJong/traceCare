@@ -247,10 +247,15 @@ VisitHistory 기준(가공된 "방문 단위" 데이터). 원본 GPS 좌표 나�
 | Request(`/search`, 바디) | `careTargetId` | string(UUID) | 검색 대상 CareTarget의 `public_id`(필수) |
 | Request(`/search`, 바디) | `query` | string | 자연어 검색어(최대 500자). "지난주"/"이번달" 등 러프한 시간 키워드를 인식해 조회 기간을 좁히고, 인식되는 키워드가 없으면 최근 90일을 기본 기간으로 검색한다 |
 | Response(`/search`) | `answer` | string | LLM이 생성한 답변 텍스트. 해당 기간에 일치하는 방문 기록이 없으면 에러가 아니라 "그런 기록이 없다"는 자연어 답변으로 응답한다 |
+| Request(`/report/weekly`, 바디) | `careTargetId` | string(UUID) | 리포트 대상 CareTarget의 `public_id`(필수) |
+| Response(`/report/weekly`) | `answer` | string | LLM이 생성한 주간 리포트 텍스트 |
+| Response(`/report/weekly`) | `visitCount` | number | 리포트의 근거가 된 방문 건수 |
 
-`/summary`, `/search` 모두 대상 CareTarget에 방문 이력이 아예 없으면(요약 기간/검색 기간과 무관하게) `VISIT_001`(404)을 반환하고 LLM을 호출하지 않는다.
+`/summary`, `/search`, `/report/weekly` 모두 대상 CareTarget에 방문 이력이 아예 없으면(조회 기간과 무관하게) `VISIT_001`(404)을 반환하고 LLM을 호출하지 않는다.
 
-성공 코드: `AI_001` · 주요 실패 코드: `AI_002`(500, LLM API 호출 실패), `AI_004`(429, LLM 호출 한도 초과), `TARGET_002`(403, `careTargetId` 관계 미매핑), `VISIT_001`(404, `/summary`·`/search` 대상 방문 이력 없음), `COMMON_002`(400, `careTargetId` 누락 또는 `/summary`의 `from`이 `to`보다 이후)
+`/report/weekly`는 `/summary`와 요청/응답 구조가 거의 같지만 기간을 요청자가 지정하지 않는다 — "이번 주"는 항상 요청 시점 기준 **최근 7일(rolling)**로 고정이다(문서에 정의가 없어 자체 결정, 근거는 `AiChatService` Javadoc 참고). 과거 특정 주를 조회하는 파라미터는 없으며, 온디맨드(호출 시점에 즉시 생성) 방식만 지원한다 — 정기 배치/자동 생성은 지원하지 않는다.
+
+성공 코드: `AI_001` · 주요 실패 코드: `AI_002`(500, LLM API 호출 실패), `AI_004`(429, LLM 호출 한도 초과), `TARGET_002`(403, `careTargetId` 관계 미매핑), `VISIT_001`(404, `/summary`·`/search`·`/report/weekly` 대상 방문 이력 없음), `COMMON_002`(400, `careTargetId` 누락 또는 `/summary`의 `from`이 `to`보다 이후)
 
 ### 3.7 알림
 
