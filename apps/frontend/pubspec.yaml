@@ -1,0 +1,42 @@
+name: tracecare_app
+description: "TraceCare — 아이·노인 케어 위치추적 알림 시스템 (Flutter App)"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.13.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # 상태관리 — docs/frontend/Coding_Convention.md §2에서 Riverpod 1차 추천, 이번 세션에 채택 확정
+  flutter_riverpod: ^3.4.3
+
+  # API 연동 — docs/api/API_Response_Rule.md §6~7
+  dio: ^5.11.1
+
+  # 토큰 저장 — docs/security/Security_Guide.md §3.1 (SharedPreferences 금지)
+  flutter_secure_storage: ^11.0.0
+
+  # Google OAuth2 로그인
+  google_sign_in: ^7.2.0
+
+  # 백그라운드 위치 전송 — 선택 근거는 결과 보고 참고
+  # (flutter_background_service는 최신 안정 버전이 20개월 전 배포로 유지보수가 정체돼 배제)
+  flutter_foreground_task: ^11.0.2
+  geolocator: ^14.0.3
+  permission_handler: ^13.0.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  mocktail: ^1.0.5
+  integration_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true

@@ -1,0 +1,55 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# Widget Preview related
+.widget_preview/
+
+# 실제 값을 채운 환경 설정 파일은 커밋하지 않는다(Security_Guide.md — GOOGLE_CLIENT_ID 등).
+# --dart-define으로 주입하므로 앱에 번들되지는 않지만, 로컬 실행 스크립트에 값을 적어두는
+# 습관을 막기 위해 예방적으로 제외한다. 실제 값은 .env.example을 참고해 --dart-define으로 전달한다.
+.env
+.env.*
+!.env.example
