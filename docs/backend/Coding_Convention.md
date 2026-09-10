@@ -184,6 +184,8 @@ public class CareTargetController {
 
 ## 9. 테스트 작성 규칙
 
+- 새 기능 추가/버그 수정 PR은 관련 테스트(성공 케이스 + 실패/예외 케이스)를 포함하는 것을
+  기본으로 한다. 테스트 없이 구현만 포함된 PR은 예외적인 경우(단순 문서/설정 변경 등)로 한정한다.
 - 프레임워크: JUnit 5 + Mockito + AssertJ.
 - 테스트 클래스명: `{대상클래스}Test`(단위) / `{대상클래스}IntegrationTest`(통합).
 - 테스트 메서드명은 `한글로 상황을 설명`하거나(`@DisplayName` 사용) `should_결과_when_조건` 형식 중 하나로 팀 전체 통일한다.
