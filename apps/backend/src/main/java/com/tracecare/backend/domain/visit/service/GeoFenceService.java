@@ -73,9 +73,14 @@ public class GeoFenceService {
      * 캐시를 추가하지 않고, 이미 조회하는 최신 VisitHistory 행에서 기준 시각을 그대로 뽑아 쓴다 — 열린 방문이면 그 행의 {@code
      * arrivalTime}(마지막 도착 판정 시각), 없으면(이미 종료된 방문만 있으면) 그 행의 {@code departureTime}(마지막 이탈 판정 시각)이
      * "마지막으로 판정을 거친 시각"과 정확히 같다 — 둘 다 이 메서드가 실제로 상태를 바꾼 시점에만 기록되는 값이기 때문이다.
+     *
+     * @return 이번 판정 결과 CareTarget이 등록된 Place 안에 있으면(도착 직후 포함) {@code true}. {@code
+     *     UnregisteredStayDetector}(DATABASE_DESIGN_GUIDE.md §15.2)가 이 값으로 "등록 안 된 곳" 감지 로직을 실행할지,
+     *     아니면 진행 중이던 이상행동을 해제할지 분기한다 — Place 매칭 로직을 두 서비스에 중복 구현하지 않기 위해 반환값으로 전달한다(검증 v2
+     *     이후 확정).
      */
     @Transactional
-    public void evaluate(Long careTargetId, Double latitude, Double longitude, Instant recordedAt) {
+    public boolean evaluate(Long careTargetId, Double latitude, Double longitude, Instant recordedAt) {
         Optional<VisitHistory> lastVisit =
                 visitHistoryRepository.findFirstByUserIdOrderByArrivalTimeDesc(careTargetId);
 
@@ -93,7 +98,7 @@ public class GeoFenceService {
                     careTargetId,
                     recordedAt,
                     lastEvaluatedAt);
-            return;
+            return lastVisit.filter(VisitHistory::isOpen).isPresent();
         }
 
         List<PlaceResponse> places = placeService.getPlacesForGeofence(careTargetId);
@@ -103,13 +108,15 @@ public class GeoFenceService {
         if (matched != null
                 && openVisit.isPresent()
                 && matched.getName().equals(openVisit.get().getPlaceName())) {
-            return;
+            return true;
         }
 
         openVisit.ifPresent(visit -> depart(careTargetId, visit, recordedAt));
         if (matched != null) {
             arrive(careTargetId, matched, latitude, longitude, recordedAt);
+            return true;
         }
+        return false;
     }
 
     private PlaceResponse findClosestMatch(

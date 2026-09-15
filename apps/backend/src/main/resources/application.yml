@@ -47,5 +47,15 @@ place:
   # 중복 등록 판정 반경(m) — Haversine 실거리 기준, GPS 오차를 고려해 정확히 같은 좌표가 아니어도 중복으로 판단(2026-08 확정)
   duplicate-distance-meters: ${PLACE_DUPLICATE_DISTANCE_METERS:50}
 
+anomaly:
+  # DATABASE_DESIGN_GUIDE.md §15 확정. AiChatService의 @Value 개별 주입 관례를 그대로 따른다
+  # (@ConfigurationProperties 미사용, 이 프로젝트 기존 패턴).
+  arrival-delay-detect-minutes: ${ANOMALY_ARRIVAL_DELAY_DETECT_MINUTES:10}
+  unregistered-stay-detect-minutes: ${ANOMALY_UNREGISTERED_STAY_DETECT_MINUTES:10}
+  # "같은 곳에 머무름" 판정 반경(m) — Place.duplicate-distance-meters와 동일 근거(GPS 오차 감안, 2026-09-14 확정)
+  unregistered-stay-radius-meters: ${ANOMALY_UNREGISTERED_STAY_RADIUS_METERS:50}
+  scheduler:
+    fixed-delay-minutes: ${ANOMALY_SCHEDULER_FIXED_DELAY_MINUTES:5}
+
 server:
   port: ${SERVER_PORT:8080}

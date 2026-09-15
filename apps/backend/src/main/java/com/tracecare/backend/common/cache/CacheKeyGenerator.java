@@ -65,4 +65,14 @@ public class CacheKeyGenerator {
     public String inviteFail(String token) {
         return CacheKeys.INVITE_FAIL + token;
     }
+
+    /** Cache_Strategy_Guide.md §3.2 {@code anomaly:active:{careTargetId}:{type}}. */
+    public String anomalyActive(String careTargetId, String type) {
+        return CacheKeys.ANOMALY_ACTIVE + careTargetId + ":" + type;
+    }
+
+    /** Cache_Strategy_Guide.md §3.2 {@code anomaly:candidate:{careTargetId}}. */
+    public String anomalyCandidate(String careTargetId) {
+        return CacheKeys.ANOMALY_CANDIDATE + careTargetId;
+    }
 }

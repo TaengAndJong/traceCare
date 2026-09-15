@@ -77,8 +77,17 @@ public class NotificationHistory {
     @Column(name = "place_name", updatable = false)
     private String placeName;
 
+    /** {@code type=AI_ANOMALY}일 때만 값이 있다 — 어느 AnomalyEvent에 대한 알림인지 연결한다(§15.2). */
+    @Column(name = "anomaly_event_id", updatable = false)
+    private Long anomalyEventId;
+
     private NotificationHistory(
-            Long userId, Long targetId, String type, UUID eventId, String placeName) {
+            Long userId,
+            Long targetId,
+            String type,
+            UUID eventId,
+            String placeName,
+            Long anomalyEventId) {
         this.userId = userId;
         this.targetId = targetId;
         this.type = type;
@@ -87,6 +96,7 @@ public class NotificationHistory {
         this.sentAt = Instant.now();
         this.status = STATUS_SENT;
         this.placeName = placeName;
+        this.anomalyEventId = anomalyEventId;
     }
 
     /**
@@ -95,7 +105,14 @@ public class NotificationHistory {
      */
     public static NotificationHistory create(
             Long userId, Long targetId, String type, UUID eventId, String placeName) {
-        return new NotificationHistory(userId, targetId, type, eventId, placeName);
+        return new NotificationHistory(userId, targetId, type, eventId, placeName, null);
+    }
+
+    /** {@code AnomalyScheduler}가 이상행동을 즉시 알림으로 승격할 때 사용한다(type=AI_ANOMALY 고정). */
+    public static NotificationHistory createForAnomaly(
+            Long userId, Long targetId, UUID eventId, String placeName, Long anomalyEventId) {
+        return new NotificationHistory(
+                userId, targetId, TYPE_AI_ANOMALY, eventId, placeName, anomalyEventId);
     }
 
     public void markFailed() {

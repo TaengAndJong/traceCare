@@ -10,6 +10,7 @@ import com.tracecare.backend.common.exception.business.InvalidLocationCoordinate
 import com.tracecare.backend.common.exception.business.LocationNotFoundException;
 import com.tracecare.backend.common.validation.LatitudeValidator;
 import com.tracecare.backend.common.validation.LongitudeValidator;
+import com.tracecare.backend.domain.anomaly.service.UnregisteredStayDetector;
 import com.tracecare.backend.domain.auth.entity.User;
 import com.tracecare.backend.domain.auth.repository.UserRepository;
 import com.tracecare.backend.domain.location.caretarget.dto.request.LocationSendRequest;
@@ -41,6 +42,7 @@ public class LocationService {
     private final LocationHistoryAsyncWriter locationHistoryAsyncWriter;
     private final LocationRealtimePublisher locationRealtimePublisher;
     private final GeoFenceService geoFenceService;
+    private final UnregisteredStayDetector unregisteredStayDetector;
 
     public LocationService(
             UserRepository userRepository,
@@ -49,7 +51,8 @@ public class LocationService {
             LocationCacheStore locationCacheStore,
             LocationHistoryAsyncWriter locationHistoryAsyncWriter,
             LocationRealtimePublisher locationRealtimePublisher,
-            GeoFenceService geoFenceService) {
+            GeoFenceService geoFenceService,
+            UnregisteredStayDetector unregisteredStayDetector) {
         this.userRepository = userRepository;
         this.locationHistoryRepository = locationHistoryRepository;
         this.locationHistoryWriter = locationHistoryWriter;
@@ -57,6 +60,7 @@ public class LocationService {
         this.locationHistoryAsyncWriter = locationHistoryAsyncWriter;
         this.locationRealtimePublisher = locationRealtimePublisher;
         this.geoFenceService = geoFenceService;
+        this.unregisteredStayDetector = unregisteredStayDetector;
     }
 
     /**
@@ -84,8 +88,18 @@ public class LocationService {
                 request.getLatitude(),
                 request.getLongitude(),
                 request.getRecordedAt());
-        geoFenceService.evaluate(
-                callerId, request.getLatitude(), request.getLongitude(), request.getRecordedAt());
+        boolean placeMatched =
+                geoFenceService.evaluate(
+                        callerId,
+                        request.getLatitude(),
+                        request.getLongitude(),
+                        request.getRecordedAt());
+        unregisteredStayDetector.evaluate(
+                callerId,
+                request.getLatitude(),
+                request.getLongitude(),
+                request.getRecordedAt(),
+                placeMatched);
 
         return LocationSendResponse.builder()
                 .locationId(locationId)
@@ -142,8 +156,18 @@ public class LocationService {
                 request.getLatitude(),
                 request.getLongitude(),
                 request.getRecordedAt());
-        geoFenceService.evaluate(
-                callerId, request.getLatitude(), request.getLongitude(), request.getRecordedAt());
+        boolean placeMatched =
+                geoFenceService.evaluate(
+                        callerId,
+                        request.getLatitude(),
+                        request.getLongitude(),
+                        request.getRecordedAt());
+        unregisteredStayDetector.evaluate(
+                callerId,
+                request.getLatitude(),
+                request.getLongitude(),
+                request.getRecordedAt(),
+                placeMatched);
         locationHistoryAsyncWriter.persist(callerId, latitude, longitude, request.getRecordedAt());
     }
 
