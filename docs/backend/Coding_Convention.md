@@ -53,13 +53,18 @@ com.tracecare.backend
  │   ├─ guardian                 # 보호자 프로필, 보호대상자 관리
  │   ├─ caretarget                # 보호대상자 프로필, 위치 전송, 도착 확인, 긴급 연락
  │   ├─ location                 # 위치 조회/전송, LocationHistory
- │   ├─ place                    # 장소(안심구역), GeoFence
+ │   ├─ place                    # 장소(안심구역), GeoFence(*)
  │   ├─ visit                    # 방문 히스토리(VisitHistory)
  │   ├─ notification              # 알림 조회/발송(NotificationHistory)
  │   └─ ai                       # AI 예측/케어 비서 연동(FastAPI 호출)
  │
  └─ TracecareBackendApplication.java
 ```
+
+> (*) GeoFence는 두 갈래로 나뉜다 — Place 엔티티/설정(반경, 좌표 등) 자체는 이 표대로 `place` 도메인 소관이지만,
+> **판정 로직(`GeoFenceService`)은 `visit` 도메인 소관**이다. 도착/이탈 판정 결과로 `VisitHistory` 상태를 직접
+> 변경하고 `VisitArrivedEvent`/`VisitDepartedEvent`를 발행하는 것이 핵심 책임이라, §1.3 "관계의 주인 쪽에 둔다"
+> 원칙에 따라 상태가 실제로 바뀌는 쪽(visit)에 위치시켰다(2026-09-14, 이상행동 감지 기능 추가 세션에서 확인/문서화).
 
 각 도메인 패키지 내부는 아래 하위 구조를 동일하게 반복한다.
 
@@ -205,6 +210,8 @@ void getCareTarget_notFound_throwsException() {
         .isInstanceOf(CareTargetNotFoundException.class);
 }
 ```
+
+> **실제 관행**: 영문 `{대상}_{조건}_{결과}` 메서드명 + 한글 `@DisplayName` **병행**(위 예시 코드 그대로) — 위 본문의 "둘 중 하나로 통일" 표현과 예시 코드가 서로 다른 걸 가리키고 있어, 실제 코드 기준으로 명확화한다. 기존 테스트 전체(`GeoFenceServiceTest`, `AiChatServiceTest`, `UnregisteredStayDetectorTest` 등, 2026-09-14 확인)가 `should_결과_when_조건` 없이 이 병행 패턴만 쓴다.
 
 ---
 

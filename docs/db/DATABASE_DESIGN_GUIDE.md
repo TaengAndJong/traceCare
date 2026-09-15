@@ -3,7 +3,7 @@
 
 - **프로젝트**: 아이·노인 케어 위치추적 알림 시스템 (GIS)
 - **대상 DBMS**: PostgreSQL (+ pgvector), 캐시: Redis
-- **문서 버전**: v6.1 (최종 확정본 — idx_vh_place 인덱스 §9 정식 반영, Partial Index 개선)
+- **문서 버전**: v6.2 (§15 이상행동 감지(ARRIVAL_DELAY/UNREGISTERED_STAY) + /explain 확장 반영, 2026-09-14)
 - **전제**: 포트폴리오 프로젝트이나, 실 서비스 운영 시 수십만~수백만 사용자·수억 건의 위치 데이터를 처리하는 상황을 가정하여 설계
 
 본 문서는 데이터베이스 스키마·저장 전략·권한 모델의 DB 반영을 담당한다. 인증/인가 상세 정책은 Security Guide, 예외 처리는 Exception Handling Rule, API 응답 형식은 API Response Rule, 로그 보관·마스킹은 Logging Guide를 따르며 본 문서에서 재정의하지 않는다.
@@ -658,3 +658,88 @@ VECTOR(n)의 차원과 Gemini 무료 사용량 한도는 직접적 관계가 없
 **본 데이터베이스 설계 문서는 이번 갱신으로 §1~§14 전 항목이 확정되었다.** 다음 단계는 본 설계를 기준으로 한 SQL DDL 스크립트 작성이다.
 
 > 본 문서는 SQL DDL을 포함하지 않는다. 본 설계를 기준으로 한 SQL 스크립트 작성이 다음 단계 작업이다.
+
+---
+
+## 15. 이상행동 감지(ARRIVAL_DELAY/UNREGISTERED_STAY) + /explain 확장 (2026-09-14)
+
+"[Claude Code 전달용] 이상행동 감지 + `/explain` 최종 설계 검증 요청 v2" 검증 결과 반영해 확정. DDL은
+`tracecare_schema_ddl_2026-09-14_1.1.sql`. 신규 테이블 2개, 기존 테이블 컬럼 추가 2건.
+
+### 15.1 PlaceArrivalSchedule (신규, Master Data)
+
+Guardian이 등록하는 요일별(`day_of_week`, ISO 1=월~7=일) 예상 도착 시각. `AnomalyScheduler`가 오늘 요일
+스케줄 중 아직 도착 기록이 없는 것을 찾아 `ARRIVAL_DELAY`를 감지하는 기준 데이터다.
+
+- `(place_id, day_of_week)` UNIQUE — 같은 장소·요일에 스케줄이 중복되면 스케줄러가 어느 것을 기준으로
+  판단할지 모호해지므로 원천 차단(검증 v2 §2.1 지적 반영).
+- `place_id` FK는 `ON DELETE CASCADE` — VisitHistory/ArrivalHistory(이력, RESTRICT/SET NULL)와 달리
+  이 테이블은 "현재 유효한 설정값"이라 Place가 삭제되면 스케줄도 의미가 없다.
+- 스케줄러 실행 주기는 `anomaly.scheduler.fixed-delay-minutes`(기본 5분) — 감지 기준(기본 10분)을 놓치지
+  않을 만큼 촘촘하되, 매 tick마다 전체 CareTarget을 스캔하는 부담을 고려한 절충값(검증 v2 §2.2 근거).
+- 한 CareTarget이 하루 여러 Place에 스케줄을 가지면 `AnomalyEvent`가 동시에 여러 건 진행 중일 수 있다 —
+  Place별로 독립된 이벤트이므로 문제없다(검증 v2 §2.2 결론).
+
+### 15.2 AnomalyEvent (신규, Time-Series — 파티셔닝 조건부 권장, 현 단계 미적용)
+
+`ARRIVAL_DELAY`/`UNREGISTERED_STAY` 감지 상태의 **Source of Truth**. `NotificationHistory`(기존
+`type=AI_ANOMALY`, §3.7)는 "그에 대해 실제 발송한 알림 로그"이고, 이 테이블은 "감지된 이상행동 상태" 자체를
+표현한다 — 역할이 분리돼 있고 `NotificationHistory.anomaly_event_id`(신규 FK, nullable, `ON DELETE
+SET NULL`)로 서로 연결한다(검증 v2 §2.5 지적 반영 — v1/v2 시점에는 이 연결이 없어 "이 알림이 어느
+AnomalyEvent에 대한 것인지" 추적할 방법이 없었다).
+
+- **감지(Detection)와 알림 승격(Escalation) 분리가 핵심 원칙이다.** `detected_at`은 항상 전역 설정값
+  (`anomaly.arrival-delay-detect-minutes`/`anomaly.unregistered-stay-detect-minutes`, 각 기본
+  10분)만으로 정해지는 객관적 사실이며, Guardian별로 달라지지 않는다. 검증 v2 초안에는 Guardian 개인별
+  `realtime_interval_minutes`가 "감지 기준 자체를 조정"한다는 서술이 있었으나, 한 CareTarget에 Guardian이
+  여러 명이고 서로 다른 값을 설정하면 `AnomalyEvent`(단일 `detected_at`)가 이를 표현할 수 없어 스키마와
+  모순됐다(검증 v2 §2.2 지적). **최종 확정**: Guardian별 설정(`GuardianTarget.escalate_minutes_arrival`/
+  `escalate_minutes_stay`)은 감지 이후 "언제 알림으로 승격할지"에만 관여한다 — REALTIME/HYBRID 두 모드가
+  같은 메커니즘(감지 후 N분 경과 시 승격)을 공유하는 단일 컬럼이고, `notification_mode` 값 자체는 UI
+  프리셋 라벨(REALTIME→10분 제안, HYBRID→30/60분 제안) 역할만 한다. 이 변경으로 v2에 있던
+  `realtime_interval_minutes` 컬럼은 폐지됐다.
+- `type` CHECK 2종(`ARRIVAL_DELAY`, `UNREGISTERED_STAY`) — `NotificationHistory.type`의 7종 CHECK와는
+  별개 컬럼/제약이다(혼동 방지).
+- `place_id`(nullable, `ON DELETE SET NULL`): `ARRIVAL_DELAY`는 지연된 예정 장소, `UNREGISTERED_STAY`는
+  근접한 등록 장소(있으면) 참고용.
+- `latitude`/`longitude`(nullable): `UNREGISTERED_STAY`만 채운다(미등록 위치 자체가 좌표로만 특정되므로).
+- `escalated_at`(nullable): HYBRID/REALTIME이 승격 알림을 발송한 시각. `resolved_at`(nullable): 정상
+  도착(ARRIVAL_DELAY) 또는 이탈/등록 장소 진입(UNREGISTERED_STAY) 확인 시각.
+- 파티셔닝은 VisitHistory/NotificationHistory와 동일하게 "조건부 권장, 현 단계 미적용" — 발생 빈도가
+  LocationHistory보다 훨씬 낮다(위치 수신마다가 아니라 실제 이상 감지 시에만 생성).
+- 인덱스: `(user_id, type, detected_at DESC)`(§1.6 목록 조회 + `/explain` "최근 N일 집계" 질문 공용),
+  `(place_id) WHERE place_id IS NOT NULL`(FK 대상 컬럼 인덱스 원칙, Partial), `(escalated_at) WHERE
+  resolved_at IS NULL`(스케줄러의 "승격 대상 전체 스캔"이 특정 CareTarget에 한정되지 않아 위 복합
+  인덱스로 커버되지 않으므로 별도 Partial Index로 지원, 검증 v2 §2.1 지적 반영).
+- `/explain`의 "과거 비슷한 위치 방문 이력"(UNREGISTERED_STAY 마지막 질문)은 좌표 근접 조회가 필요한데,
+  프로젝트에 PostGIS/earthdistance 확장이 없다(검증 v2 §2.6에서 확인). 정밀한 공간 인덱스 대신 Bounding
+  Box로 후보를 좁힌 뒤 `GeoDistanceCalculator`(Haversine, GeoFenceService가 이미 쓰는 유틸)로 재계산하는
+  근사 방식을 쓴다 — 기존 Place 중복 판정(`PlaceService.isDuplicate`)과 동일한 절충이다.
+
+### 15.3 GuardianTarget 컬럼 추가 — 알림 모드 5종
+
+`notification_mode`(`REALTIME`/`REPORT_ONLY`/`HYBRID`/`PAUSED`, 기본 `HYBRID`),
+`escalate_minutes_arrival`(기본 30), `escalate_minutes_stay`(기본 60, 둘 다 nullable — **NULL이면 해당
+유형은 즉시 알림으로 절대 승격되지 않고 항상 `/summary` 리포트로만 처리**), `previous_notification_mode`
+(nullable), `paused_until`(nullable).
+
+- Guardian 개인별 설정이다 — PRIMARY가 SUB의 것을 대신 설정할 수 없다(Service 계층에서 "호출자 본인
+  행인지"만 확인, 관계 검증과는 별개).
+- **PAUSED 자동 복귀**: v1/v2 검증 시점에는 복귀할 원래 모드를 저장할 컬럼이 없어 `paused_until`만으로는
+  복귀가 불가능했다(검증 v2 §2.4 지적). `previous_notification_mode`를 추가해 해소했다. 복귀 트리거는
+  별도 Lazy 로직을 두지 않고 `AnomalyScheduler`가 매 tick마다 `paused_until` 경과 여부도 함께 확인해
+  처리한다(§15.1 스케줄러와 역할 공유 — 이 프로젝트 최초의 시간 기반 배치이므로 새 스케줄러를 하나 더
+  만들지 않고 기존 tick에 얹는다).
+- `previous_notification_mode`는 `PAUSED`를 값으로 가질 수 없다(CHECK) — "일시정지 직전 모드"라는 정의상
+  당연하다.
+
+### 15.4 NotificationHistory 컬럼 추가
+
+`anomaly_event_id`(nullable, `ON DELETE SET NULL`) — §15.2 참고.
+
+### 15.5 보류/후속 검토 필요 (구현 시점 재확인 대상)
+
+- `HYBRID`에서 미승격 이상행동을 `/summary`에 이미 노출한 뒤 같은 날 나중에 승격되면, 리포트에도 남고
+  실시간 알림도 가는 중복 노출을 어떻게 다룰지는 아직 결정하지 않았다 — 구현 시점에 사용자 확인 필요.
+- `AnomalyEvent`의 장기 보관 기간 정책(§7.2에 준하는 별도 기준)은 아직 정의하지 않았다 — 운영 데이터가
+  쌓이기 전까지는 우선순위가 낮다고 판단해 이번 확정 범위에서 제외.
