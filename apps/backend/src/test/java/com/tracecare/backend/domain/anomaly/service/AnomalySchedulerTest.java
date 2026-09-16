@@ -1,0 +1,458 @@
+package com.tracecare.backend.domain.anomaly.service;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+
+import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
+import java.util.List;
+import java.util.Optional;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.redis.RedisConnectionFailureException;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.test.util.ReflectionTestUtils;
+
+import com.tracecare.backend.common.cache.CacheKeyGenerator;
+import com.tracecare.backend.domain.anomaly.entity.AnomalyEvent;
+import com.tracecare.backend.domain.anomaly.repository.AnomalyEventRepository;
+import com.tracecare.backend.domain.anomaly.repository.PlaceArrivalScheduleRepository;
+import com.tracecare.backend.domain.anomaly.repository.PlaceArrivalScheduleRepository.ScheduledPlace;
+import com.tracecare.backend.domain.guardian.entity.GuardianTarget;
+import com.tracecare.backend.domain.guardian.repository.GuardianTargetRepository;
+import com.tracecare.backend.domain.notification.repository.NotificationHistoryRepository;
+import com.tracecare.backend.domain.notification.service.NotificationDispatchService;
+import com.tracecare.backend.domain.notification.service.NotificationDispatchService.AnomalyEscalationTarget;
+import com.tracecare.backend.domain.visit.repository.VisitHistoryRepository;
+
+/**
+ * DATABASE_DESIGN_GUIDE.md §15.6(§4.2 확정 A~D)의 3가지 책임(감지/승격/PAUSED 복귀)과 분산 락을 검증한다.
+ * {@code expectedArrivalTime}/임계값 판단은 시스템 시계(§15.1 {@code ZoneId.systemDefault()})를 기준으로 하므로,
+ * 자정 경계를 피하도록 넉넉한 여유(수십 분)를 두고 상대 시각을 구성한다.
+ */
+@ExtendWith(MockitoExtension.class)
+class AnomalySchedulerTest {
+
+    private static final int DETECT_MINUTES = 10;
+    private static final int PAGE_SIZE = 2;
+    private static final long LOCK_TTL_MINUTES = 4;
+    private static final Long CARE_TARGET_ID = 1L;
+    private static final Long PLACE_ID = 10L;
+    private static final ZoneId ZONE = ZoneId.systemDefault();
+
+    @Mock private PlaceArrivalScheduleRepository placeArrivalScheduleRepository;
+    @Mock private AnomalyEventRepository anomalyEventRepository;
+    @Mock private VisitHistoryRepository visitHistoryRepository;
+    @Mock private GuardianTargetRepository guardianTargetRepository;
+    @Mock private NotificationHistoryRepository notificationHistoryRepository;
+    @Mock private NotificationDispatchService notificationDispatchService;
+    @Mock private RedisTemplate<String, Object> redisTemplate;
+    @Mock private ValueOperations<String, Object> valueOperations;
+
+    private final CacheKeyGenerator cacheKeyGenerator = new CacheKeyGenerator();
+
+    private AnomalyScheduler scheduler() {
+        return new AnomalyScheduler(
+                placeArrivalScheduleRepository,
+                anomalyEventRepository,
+                visitHistoryRepository,
+                guardianTargetRepository,
+                notificationHistoryRepository,
+                notificationDispatchService,
+                redisTemplate,
+                cacheKeyGenerator,
+                DETECT_MINUTES,
+                PAGE_SIZE,
+                LOCK_TTL_MINUTES);
+    }
+
+    /**
+     * 락이 정상적으로 걸리도록(setIfAbsent=true) 기본값을 잡아둔다. {@code unlock()}의 소유자 비교(get() 값이
+     * 실제 락 값과 같을 때만 삭제)는 여기서 정확히 재현하지 않고 항상 {@code null}(불일치)을 반환하게 해 delete가
+     * 안전하게 스킵되도록만 한다 — 이 테스트 스위트의 관심사는 unlock 자체의 소유권 비교 정확성이 아니라 tick의
+     * 3가지 책임(감지/승격/PAUSED 복귀)과 락 획득 성공/실패 분기이기 때문이다. {@code thenAnswer}/캡처 기반 동적
+     * 응답은 의도적으로 쓰지 않는다 — 같은 메서드를 테스트별로 재스텁할 때 Mockito가 스텁 등록 도중 기존 응답을
+     * 미리 한 번 평가해보는 특성상, 동적 응답 안에서 부작용(예외)이 있으면 스텁 등록 자체가 깨지기 때문이다.
+     * 세 역할(감지/승격/PAUSED 복귀) 모두 기본은 "대상 없음"으로 중립화해, 각 테스트가 필요한 역할만 재정의한다.
+     */
+    @BeforeEach
+    void setUpNeutralDefaults() {
+        String lockKey = cacheKeyGenerator.anomalySchedulerLock();
+        lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        lenient().when(valueOperations.setIfAbsent(eq(lockKey), any(), any())).thenReturn(true);
+        lenient().when(valueOperations.get(lockKey)).thenReturn(null);
+
+        lenient()
+                .when(placeArrivalScheduleRepository.findScheduledByDayOfWeek(anyInt(), any()))
+                .thenReturn(Page.empty());
+        lenient().when(anomalyEventRepository.findByResolvedAtIsNull()).thenReturn(List.of());
+        lenient()
+                .when(guardianTargetRepository.findByNotificationMode(
+                        GuardianTarget.NOTIFICATION_MODE_PAUSED))
+                .thenReturn(List.of());
+    }
+
+    private ScheduledPlace scheduledPlace(LocalTime expectedArrivalTime) {
+        ScheduledPlace scheduled = org.mockito.Mockito.mock(ScheduledPlace.class);
+        lenient().when(scheduled.getScheduleId()).thenReturn(100L);
+        lenient().when(scheduled.getPlaceId()).thenReturn(PLACE_ID);
+        lenient().when(scheduled.getTargetId()).thenReturn(CARE_TARGET_ID);
+        lenient().when(scheduled.getExpectedArrivalTime()).thenReturn(expectedArrivalTime);
+        return scheduled;
+    }
+
+    // ---------------------------------------------------------------------
+    // 분산 락
+    // ---------------------------------------------------------------------
+
+    @Test
+    @DisplayName("다른 인스턴스가 락을 쥐고 있으면(setIfAbsent=false) 이번 tick 전체를 건너뛴다")
+    void tick_lockHeldByAnotherInstance_skipsEntireTick() {
+        // given
+        when(valueOperations.setIfAbsent(eq(cacheKeyGenerator.anomalySchedulerLock()), any(), any()))
+                .thenReturn(false);
+
+        // when
+        scheduler().tick();
+
+        // then — 세 역할 모두 아예 실행되지 않는다
+        verifyNoInteractions(
+                placeArrivalScheduleRepository,
+                anomalyEventRepository,
+                guardianTargetRepository,
+                notificationDispatchService);
+    }
+
+    @Test
+    @DisplayName("Redis 장애로 락 획득 자체가 실패하면(예외) 락 없이도 tick을 진행한다(fail-open)")
+    void tick_lockAcquireThrows_stillProceedsWithAllRoles() {
+        // given
+        when(valueOperations.setIfAbsent(
+                        eq(cacheKeyGenerator.anomalySchedulerLock()), any(), any()))
+                .thenThrow(new RedisConnectionFailureException("연결 실패(테스트)"));
+
+        // when
+        scheduler().tick();
+
+        // then — 락 없이도 역할1(감지) 조회가 실제로 수행됐다
+        verify(placeArrivalScheduleRepository).findScheduledByDayOfWeek(anyInt(), any());
+    }
+
+    // ---------------------------------------------------------------------
+    // 역할1: ARRIVAL_DELAY 감지
+    // ---------------------------------------------------------------------
+
+    @Test
+    @DisplayName("예상 도착 시각+감지기준(10분)이 아직 지나지 않았으면 AnomalyEvent를 생성하지 않는다")
+    void detectArrivalDelay_deadlineNotYetReached_doesNotCreateEvent() {
+        // given — 예상 도착 시각이 1시간 뒤(아직 지각 판단 자체가 불가능한 시점)
+        ScheduledPlace scheduled = scheduledPlace(LocalTime.now(ZONE).plusHours(1));
+        when(placeArrivalScheduleRepository.findScheduledByDayOfWeek(anyInt(), any()))
+                .thenReturn(new PageImpl<>(List.of(scheduled)));
+        when(visitHistoryRepository.existsByUserIdAndPlaceIdAndArrivalTimeGreaterThanEqual(
+                        eq(CARE_TARGET_ID), eq(PLACE_ID), any()))
+                .thenReturn(false);
+
+        // when
+        scheduler().tick();
+
+        // then
+        verify(anomalyEventRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("예상 도착 시각+감지기준을 넘겼고 도착 기록이 없으면 AnomalyEvent(ARRIVAL_DELAY)를 생성한다")
+    void detectArrivalDelay_deadlinePassedAndNotArrived_createsAnomalyEvent() {
+        // given — 예상 도착 시각이 30분 전(10분 감지기준을 이미 넘김)
+        ScheduledPlace scheduled = scheduledPlace(LocalTime.now(ZONE).minusMinutes(30));
+        when(placeArrivalScheduleRepository.findScheduledByDayOfWeek(anyInt(), any()))
+                .thenReturn(new PageImpl<>(List.of(scheduled)));
+        when(visitHistoryRepository.existsByUserIdAndPlaceIdAndArrivalTimeGreaterThanEqual(
+                        eq(CARE_TARGET_ID), eq(PLACE_ID), any()))
+                .thenReturn(false);
+        when(anomalyEventRepository.findOpenArrivalDelay(CARE_TARGET_ID, PLACE_ID))
+                .thenReturn(Optional.empty());
+
+        // when
+        scheduler().tick();
+
+        // then
+        ArgumentCaptor<AnomalyEvent> captor = ArgumentCaptor.forClass(AnomalyEvent.class);
+        verify(anomalyEventRepository).save(captor.capture());
+        assertThat(captor.getValue().getType()).isEqualTo(AnomalyEvent.TYPE_ARRIVAL_DELAY);
+        assertThat(captor.getValue().getUserId()).isEqualTo(CARE_TARGET_ID);
+        assertThat(captor.getValue().getPlaceId()).isEqualTo(PLACE_ID);
+    }
+
+    @Test
+    @DisplayName("이미 열린 ARRIVAL_DELAY 이벤트가 있으면 같은 스케줄에 대해 다시 생성하지 않는다")
+    void detectArrivalDelay_alreadyOpenEvent_doesNotCreateDuplicate() {
+        // given
+        ScheduledPlace scheduled = scheduledPlace(LocalTime.now(ZONE).minusMinutes(30));
+        when(placeArrivalScheduleRepository.findScheduledByDayOfWeek(anyInt(), any()))
+                .thenReturn(new PageImpl<>(List.of(scheduled)));
+        when(visitHistoryRepository.existsByUserIdAndPlaceIdAndArrivalTimeGreaterThanEqual(
+                        eq(CARE_TARGET_ID), eq(PLACE_ID), any()))
+                .thenReturn(false);
+        AnomalyEvent existing =
+                AnomalyEvent.createArrivalDelay(
+                        CARE_TARGET_ID, PLACE_ID, Instant.now().minus(20, ChronoUnit.MINUTES));
+        when(anomalyEventRepository.findOpenArrivalDelay(CARE_TARGET_ID, PLACE_ID))
+                .thenReturn(Optional.of(existing));
+
+        // when
+        scheduler().tick();
+
+        // then
+        verify(anomalyEventRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("오늘 이미 도착한 기록이 있으면 열려 있던 ARRIVAL_DELAY 이벤트를 해제한다")
+    void detectArrivalDelay_arrivedToday_resolvesOpenEvent() {
+        // given
+        ScheduledPlace scheduled = scheduledPlace(LocalTime.now(ZONE).minusMinutes(30));
+        when(placeArrivalScheduleRepository.findScheduledByDayOfWeek(anyInt(), any()))
+                .thenReturn(new PageImpl<>(List.of(scheduled)));
+        when(visitHistoryRepository.existsByUserIdAndPlaceIdAndArrivalTimeGreaterThanEqual(
+                        eq(CARE_TARGET_ID), eq(PLACE_ID), any()))
+                .thenReturn(true);
+        AnomalyEvent existing =
+                AnomalyEvent.createArrivalDelay(
+                        CARE_TARGET_ID, PLACE_ID, Instant.now().minus(20, ChronoUnit.MINUTES));
+        when(anomalyEventRepository.findOpenArrivalDelay(CARE_TARGET_ID, PLACE_ID))
+                .thenReturn(Optional.of(existing));
+
+        // when
+        scheduler().tick();
+
+        // then
+        assertThat(existing.getResolvedAt()).isNotNull();
+        verify(anomalyEventRepository).save(existing);
+    }
+
+    @Test
+    @DisplayName("청크 경계 — 여러 페이지에 걸친 스케줄을 전부 처리한다(hasNext 반복)")
+    void detectArrivalDelay_pagingAcrossChunks_processesAllPages() {
+        // given — 페이지 크기 2, 총 3건(page0=2건, page1=1건)
+        ScheduledPlace a = scheduledPlace(LocalTime.now(ZONE).minusMinutes(30));
+        ScheduledPlace b = scheduledPlace(LocalTime.now(ZONE).minusMinutes(30));
+        ScheduledPlace c = scheduledPlace(LocalTime.now(ZONE).minusMinutes(30));
+        // argThat 람다는 Mockito가 기존 스텁(@BeforeEach의 any() 기본값)과의 매칭을 판단하는 과정에서
+        // null을 인자로 한 번 미리 호출해볼 수 있어 null-safe하게 작성한다(그렇지 않으면 스텁 등록 자체에서 NPE).
+        when(placeArrivalScheduleRepository.findScheduledByDayOfWeek(
+                        anyInt(), argThat((Pageable p) -> p != null && p.getPageNumber() == 0)))
+                .thenReturn(new PageImpl<>(List.of(a, b), org.springframework.data.domain.PageRequest.of(0, 2), 3));
+        when(placeArrivalScheduleRepository.findScheduledByDayOfWeek(
+                        anyInt(), argThat((Pageable p) -> p != null && p.getPageNumber() == 1)))
+                .thenReturn(new PageImpl<>(List.of(c), org.springframework.data.domain.PageRequest.of(1, 2), 3));
+        when(visitHistoryRepository.existsByUserIdAndPlaceIdAndArrivalTimeGreaterThanEqual(
+                        eq(CARE_TARGET_ID), eq(PLACE_ID), any()))
+                .thenReturn(false);
+        when(anomalyEventRepository.findOpenArrivalDelay(CARE_TARGET_ID, PLACE_ID))
+                .thenReturn(Optional.empty());
+
+        // when
+        scheduler().tick();
+
+        // then — 3건 전부 평가되어 존재 여부 조회가 3번 발생해야 한다(page0 2건 + page1 1건)
+        verify(visitHistoryRepository, org.mockito.Mockito.times(3))
+                .existsByUserIdAndPlaceIdAndArrivalTimeGreaterThanEqual(
+                        eq(CARE_TARGET_ID), eq(PLACE_ID), any());
+        verify(placeArrivalScheduleRepository)
+                .findScheduledByDayOfWeek(
+                        anyInt(), argThat((Pageable p) -> p != null && p.getPageNumber() == 1));
+    }
+
+    // ---------------------------------------------------------------------
+    // 역할2: 승격
+    // ---------------------------------------------------------------------
+
+    private AnomalyEvent openArrivalDelayEvent(Instant detectedAt) {
+        AnomalyEvent event = AnomalyEvent.createArrivalDelay(CARE_TARGET_ID, PLACE_ID, detectedAt);
+        ReflectionTestUtils.setField(event, "id", 500L);
+        return event;
+    }
+
+    private GuardianTarget activeGuardian(
+            Long guardianTargetId, Long guardianId, String mode, Integer escalateArrival) {
+        GuardianTarget guardian =
+                GuardianTarget.createActive(guardianId, CARE_TARGET_ID, GuardianTarget.ROLE_SUB);
+        ReflectionTestUtils.setField(guardian, "id", guardianTargetId);
+        guardian.updateNotificationMode(mode, escalateArrival, 60);
+        return guardian;
+    }
+
+    @Test
+    @DisplayName("감지 후 escalate_minutes_arrival이 아직 안 지났으면 승격 알림을 보내지 않는다")
+    void escalate_belowThreshold_doesNotDispatch() {
+        // given — 5분 전 감지, escalate 기준 30분(아직 25분 남음)
+        AnomalyEvent event = openArrivalDelayEvent(Instant.now().minus(5, ChronoUnit.MINUTES));
+        when(anomalyEventRepository.findByResolvedAtIsNull()).thenReturn(List.of(event));
+        GuardianTarget guardian =
+                activeGuardian(1L, 11L, GuardianTarget.NOTIFICATION_MODE_HYBRID, 30);
+        when(guardianTargetRepository.findByTargetIdAndStatus(
+                        CARE_TARGET_ID, GuardianTarget.STATUS_ACTIVE))
+                .thenReturn(List.of(guardian));
+
+        // when
+        scheduler().tick();
+
+        // then
+        verify(notificationDispatchService, never()).dispatchAnomalyEscalation(any());
+    }
+
+    @Test
+    @DisplayName("escalate_minutes_arrival이 NULL이면 아무리 시간이 지나도 절대 승격되지 않는다")
+    void escalate_nullEscalateMinutes_neverEscalates() {
+        // given
+        AnomalyEvent event = openArrivalDelayEvent(Instant.now().minus(6, ChronoUnit.HOURS));
+        when(anomalyEventRepository.findByResolvedAtIsNull()).thenReturn(List.of(event));
+        GuardianTarget guardian =
+                activeGuardian(1L, 11L, GuardianTarget.NOTIFICATION_MODE_HYBRID, null);
+        when(guardianTargetRepository.findByTargetIdAndStatus(
+                        CARE_TARGET_ID, GuardianTarget.STATUS_ACTIVE))
+                .thenReturn(List.of(guardian));
+
+        // when
+        scheduler().tick();
+
+        // then
+        verify(notificationDispatchService, never()).dispatchAnomalyEscalation(any());
+        assertThat(event.getEscalatedAt()).isNull();
+    }
+
+    @Test
+    @DisplayName("이미 이 Guardian에게 통지된 이벤트는 다시 승격 발송하지 않는다")
+    void escalate_alreadyNotifiedGuardian_doesNotDispatchAgain() {
+        // given
+        AnomalyEvent event = openArrivalDelayEvent(Instant.now().minus(20, ChronoUnit.MINUTES));
+        when(anomalyEventRepository.findByResolvedAtIsNull()).thenReturn(List.of(event));
+        GuardianTarget guardian =
+                activeGuardian(1L, 11L, GuardianTarget.NOTIFICATION_MODE_REALTIME, 10);
+        when(guardianTargetRepository.findByTargetIdAndStatus(
+                        CARE_TARGET_ID, GuardianTarget.STATUS_ACTIVE))
+                .thenReturn(List.of(guardian));
+        when(notificationHistoryRepository.existsByAnomalyEventIdAndUserId(event.getId(), 11L))
+                .thenReturn(true);
+
+        // when
+        scheduler().tick();
+
+        // then
+        verify(notificationDispatchService, never()).dispatchAnomalyEscalation(any());
+    }
+
+    @Test
+    @DisplayName(
+            "같은 이벤트에 Guardian별 escalate_minutes가 다르면, 임계값을 넘긴 Guardian만 개별적으로 승격된다"
+                    + "(§4.2 확정: A — Guardian 개인별 자율성)")
+    void escalate_multipleGuardiansDifferentThresholds_individualJudgement() {
+        // given — 감지 후 15분 경과. Guardian A는 10분 기준(승격 대상), Guardian B는 60분 기준(아직 대상 아님)
+        AnomalyEvent event = openArrivalDelayEvent(Instant.now().minus(15, ChronoUnit.MINUTES));
+        when(anomalyEventRepository.findByResolvedAtIsNull()).thenReturn(List.of(event));
+        GuardianTarget guardianA =
+                activeGuardian(1L, 11L, GuardianTarget.NOTIFICATION_MODE_REALTIME, 10);
+        GuardianTarget guardianB =
+                activeGuardian(2L, 22L, GuardianTarget.NOTIFICATION_MODE_HYBRID, 60);
+        when(guardianTargetRepository.findByTargetIdAndStatus(
+                        CARE_TARGET_ID, GuardianTarget.STATUS_ACTIVE))
+                .thenReturn(List.of(guardianA, guardianB));
+        when(notificationHistoryRepository.existsByAnomalyEventIdAndUserId(event.getId(), 11L))
+                .thenReturn(false);
+
+        // when
+        scheduler().tick();
+
+        // then — Guardian A(11L)에게만 승격 알림이 나가고 Guardian B(22L)는 대상에서 빠진다
+        ArgumentCaptor<AnomalyEscalationTarget> captor =
+                ArgumentCaptor.forClass(AnomalyEscalationTarget.class);
+        verify(notificationDispatchService).dispatchAnomalyEscalation(captor.capture());
+        assertThat(captor.getValue().guardianId()).isEqualTo(11L);
+        assertThat(event.getEscalatedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("REPORT_ONLY 모드의 Guardian은 아무리 시간이 지나도 즉시 알림으로 승격되지 않는다")
+    void escalate_modeReportOnly_neverEscalates() {
+        // given
+        AnomalyEvent event = openArrivalDelayEvent(Instant.now().minus(6, ChronoUnit.HOURS));
+        when(anomalyEventRepository.findByResolvedAtIsNull()).thenReturn(List.of(event));
+        GuardianTarget guardian =
+                activeGuardian(1L, 11L, GuardianTarget.NOTIFICATION_MODE_REPORT_ONLY, 10);
+        when(guardianTargetRepository.findByTargetIdAndStatus(
+                        CARE_TARGET_ID, GuardianTarget.STATUS_ACTIVE))
+                .thenReturn(List.of(guardian));
+
+        // when
+        scheduler().tick();
+
+        // then
+        verify(notificationDispatchService, never()).dispatchAnomalyEscalation(any());
+    }
+
+    // ---------------------------------------------------------------------
+    // 역할3: PAUSED 자동 복귀
+    // ---------------------------------------------------------------------
+
+    @Test
+    @DisplayName("paused_until이 지난 Guardian은 이전 모드로 자동 복귀한다")
+    void resumePausedGuardians_pauseDue_revertsToPreviousMode() {
+        // given
+        GuardianTarget guardian =
+                GuardianTarget.createActive(11L, CARE_TARGET_ID, GuardianTarget.ROLE_SUB);
+        ReflectionTestUtils.setField(guardian, "id", 1L);
+        guardian.pause(Instant.now().minusSeconds(60)); // 이미 지남
+        when(guardianTargetRepository.findByNotificationMode(GuardianTarget.NOTIFICATION_MODE_PAUSED))
+                .thenReturn(List.of(guardian));
+
+        // when
+        scheduler().tick();
+
+        // then
+        assertThat(guardian.getNotificationMode()).isEqualTo(GuardianTarget.NOTIFICATION_MODE_HYBRID);
+        assertThat(guardian.getPausedUntil()).isNull();
+        verify(guardianTargetRepository).save(guardian);
+    }
+
+    @Test
+    @DisplayName("paused_until이 아직 남은 Guardian은 복귀시키지 않는다")
+    void resumePausedGuardians_pauseNotYetDue_doesNotRevert() {
+        // given
+        GuardianTarget guardian =
+                GuardianTarget.createActive(11L, CARE_TARGET_ID, GuardianTarget.ROLE_SUB);
+        ReflectionTestUtils.setField(guardian, "id", 1L);
+        guardian.pause(Instant.now().plus(1, ChronoUnit.HOURS)); // 아직 한참 남음
+        when(guardianTargetRepository.findByNotificationMode(GuardianTarget.NOTIFICATION_MODE_PAUSED))
+                .thenReturn(List.of(guardian));
+
+        // when
+        scheduler().tick();
+
+        // then
+        assertThat(guardian.getNotificationMode()).isEqualTo(GuardianTarget.NOTIFICATION_MODE_PAUSED);
+        verify(guardianTargetRepository, never()).save(any());
+    }
+}
