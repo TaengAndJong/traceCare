@@ -24,4 +24,11 @@ public interface NotificationHistoryRepository extends JpaRepository<Notificatio
      * DESC)} 재사용.
      */
     Page<NotificationHistory> findByUserIdOrderBySentAtDesc(Long userId, Pageable pageable);
+
+    /**
+     * {@code AnomalyScheduler} 역할2(승격) — "이 Guardian이 이 AnomalyEvent에 대해 이미 통지받았는지"를 Guardian별로
+     * 개별 판단하기 위해 쓴다(§4.2 확정: A). {@code idx_nh_anomaly_event(anomaly_event_id) WHERE
+     * anomaly_event_id IS NOT NULL} 파티얼 인덱스로 지원된다.
+     */
+    boolean existsByAnomalyEventIdAndUserId(Long anomalyEventId, Long userId);
 }

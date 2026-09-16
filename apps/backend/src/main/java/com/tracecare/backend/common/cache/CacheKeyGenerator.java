@@ -75,4 +75,12 @@ public class CacheKeyGenerator {
     public String anomalyCandidate(String careTargetId) {
         return CacheKeys.ANOMALY_CANDIDATE + careTargetId;
     }
+
+    /**
+     * Cache_Strategy_Guide.md §3.2 {@code anomaly:scheduler:lock} — 식별자가 없는 고정 키지만, 캐시 키 문자열을
+     * Service 코드에서 직접 조립하지 않는다는 원칙(cache.md)을 그대로 지키기 위해 이 유틸을 거친다.
+     */
+    public String anomalySchedulerLock() {
+        return CacheKeys.ANOMALY_SCHEDULER_LOCK;
+    }
 }

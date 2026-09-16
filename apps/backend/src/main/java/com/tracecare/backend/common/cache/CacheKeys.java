@@ -22,6 +22,7 @@ public final class CacheKeys {
     public static final String INVITE_FAIL = "invite:fail:";
     public static final String ANOMALY_ACTIVE = "anomaly:active:";
     public static final String ANOMALY_CANDIDATE = "anomaly:candidate:";
+    public static final String ANOMALY_SCHEDULER_LOCK = "anomaly:scheduler:lock";
 
     private CacheKeys() {}
 }

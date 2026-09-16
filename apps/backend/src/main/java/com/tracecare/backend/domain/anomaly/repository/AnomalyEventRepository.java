@@ -28,13 +28,14 @@ public interface AnomalyEventRepository extends JpaRepository<AnomalyEvent, Long
             Long userId, String type);
 
     /**
-     * {@code AnomalyScheduler} 역할3(승격 처리) — 진행 중이며 아직 승격되지 않은 이벤트 전체를 CareTarget 구분 없이
-     * 스캔한다. idx_ae_open_unescalated(escalated_at) WHERE resolved_at IS NULL 파티얼 인덱스로 지원된다.
+     * {@code AnomalyScheduler} 역할2(승격) — 진행 중인 이벤트 전체를 CareTarget 구분 없이 스캔한다. {@code
+     * escalatedAt IS NULL}로 필터링하지 않는다 — §4.2 확정(A): 같은 이벤트에 Guardian이 여러 명이고 각자
+     * escalate_minutes가 다르면, 한 Guardian이 먼저 승격됐다고 다른 Guardian(더 긴 임계값)을 스캔에서 제외하면 안 되기
+     * 때문이다(Guardian 개인별 자율성 원칙 우선, 성능 비용은 감수). {@code idx_ae_open_unescalated(escalated_at)
+     * WHERE resolved_at IS NULL} 파티얼 인덱스의 WHERE 절과 이 쿼리의 조건이 정확히 일치해 그대로 재사용된다(인덱스가
+     * "미승격"이 아니라 "진행 중" 전체를 커버하는 셈).
      */
-    @Query(
-            "SELECT ae FROM AnomalyEvent ae "
-                    + "WHERE ae.resolvedAt IS NULL AND ae.escalatedAt IS NULL")
-    List<AnomalyEvent> findAllOpenUnescalated();
+    List<AnomalyEvent> findByResolvedAtIsNull();
 
     /** {@code AnomalyScheduler} 역할1 — 오늘 이미 같은 Place에 대해 생성된 ARRIVAL_DELAY가 있는지(중복 생성 방지). */
     @Query(

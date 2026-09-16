@@ -54,8 +54,13 @@ anomaly:
   unregistered-stay-detect-minutes: ${ANOMALY_UNREGISTERED_STAY_DETECT_MINUTES:10}
   # "같은 곳에 머무름" 판정 반경(m) — Place.duplicate-distance-meters와 동일 근거(GPS 오차 감안, 2026-09-14 확정)
   unregistered-stay-radius-meters: ${ANOMALY_UNREGISTERED_STAY_RADIUS_METERS:50}
+  # ARRIVAL_DELAY 감지(역할1)의 "오늘 요일 스케줄" 조회 청크 크기 — 상용화 대비(§4.2 확정: D), 포트폴리오
+  # 규모에서는 사실상 한 페이지로 끝나지만 대규모 운영 기준 설계 원칙(Root CLAUDE.md)에 따라 처음부터 Pageable로 처리
+  arrival-delay-scan-page-size: ${ANOMALY_ARRIVAL_DELAY_SCAN_PAGE_SIZE:1000}
   scheduler:
     fixed-delay-minutes: ${ANOMALY_SCHEDULER_FIXED_DELAY_MINUTES:5}
+    # tick 주기(5분)보다 짧게 — 비정상 종료 시에도 다음 tick 전에 락이 자연 해제되도록(§4.2 확정: D)
+    lock-ttl-minutes: ${ANOMALY_SCHEDULER_LOCK_TTL_MINUTES:4}
 
 server:
   port: ${SERVER_PORT:8080}

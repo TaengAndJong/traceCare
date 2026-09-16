@@ -33,6 +33,12 @@ public interface GuardianTargetRepository extends JpaRepository<GuardianTarget, 
     List<GuardianTarget> findByTargetIdAndStatus(Long targetId, String status);
 
     /**
+     * {@code AnomalyScheduler} 역할3(PAUSED 자동 복귀) — 현재 PAUSED인 행만 스캔한다(전체 사용자 규모와 무관하게
+     * "현재 일시정지 중"인 부분집합만 대상이라 작게 유지됨, §4.2 확정: D).
+     */
+    List<GuardianTarget> findByNotificationMode(String notificationMode);
+
+    /**
      * PRIMARY 위임(DATABASE_DESIGN_GUIDE.md §7)처럼 특정 관계 행을 잠근 채로 조회해야 하는 트랜잭션에서 사용한다. {@code
      * UserRepository.findByIdForUpdate}와 동일한 패턴.
      */

@@ -36,6 +36,15 @@ public interface VisitHistoryRepository extends JpaRepository<VisitHistory, Long
     Page<VisitHistory> findByUserIdAndPlaceIdOrderByArrivalTimeDesc(
             Long userId, Long placeId, Pageable pageable);
 
+    /**
+     * {@code AnomalyScheduler} 역할1(ARRIVAL_DELAY 감지)이 "오늘 이 Place에 이미 도착했는지"를 판단하는 데 쓴다
+     * (DATABASE_DESIGN_GUIDE.md §15.1). {@code idx_vh_user_arrival(user_id, arrival_time DESC)}로
+     * user_id 선두까지는 인덱스를 타고, place_id/arrival_time 조건은 그 결과 안에서 필터링된다 — 이 조회가 빈번하지 않고
+     * (스케줄러 tick당 1회) 한 CareTarget의 당일 방문 건수 자체가 적어 별도 복합 인덱스 없이도 충분하다고 판단했다.
+     */
+    boolean existsByUserIdAndPlaceIdAndArrivalTimeGreaterThanEqual(
+            Long userId, Long placeId, Instant from);
+
     /** AI 방문 예측 Stub(StubAiPredictionClient)이 "학습 데이터 충분한지" 판단하는 기준으로 쓴다. */
     long countByUserId(Long userId);
 

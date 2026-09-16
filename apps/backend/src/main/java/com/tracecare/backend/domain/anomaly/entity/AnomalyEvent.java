@@ -103,8 +103,16 @@ public class AnomalyEvent {
         return escalatedAt != null;
     }
 
+    /**
+     * "최초 승격 시각"만 기록한다(§4.2 확정: A) — Guardian마다 개별 승격 판단이라 같은 이벤트가 여러 번 승격될 수
+     * 있는데, 이미 값이 있으면 갱신하지 않아 정말 "처음" 값만 남긴다(정보/표시용, 스캔 필터로는 쓰지 않음 — {@link
+     * com.tracecare.backend.domain.anomaly.repository.AnomalyEventRepository#findByResolvedAtIsNull}
+     * 참고).
+     */
     public void escalate(Instant escalatedAt) {
-        this.escalatedAt = escalatedAt;
+        if (this.escalatedAt == null) {
+            this.escalatedAt = escalatedAt;
+        }
     }
 
     public void resolve(Instant resolvedAt) {
