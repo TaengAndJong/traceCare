@@ -60,7 +60,9 @@ class PlaceDuplicateBoundaryIntegrationTest {
 
     @BeforeAll
     static void initSchema() throws Exception {
-        String ddl = Files.readString(Paths.get("../../docs/db/tracecare_schema_ddl_1.0.sql"));
+        String ddl =
+                Files.readString(
+                        Paths.get("../../docs/db/tracecare_schema_ddl_2026-09-16_1.2.sql"));
         try (Connection connection =
                         DriverManager.getConnection(
                                 postgres.getJdbcUrl(),
