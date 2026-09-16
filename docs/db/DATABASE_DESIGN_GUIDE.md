@@ -3,7 +3,7 @@
 
 - **프로젝트**: 아이·노인 케어 위치추적 알림 시스템 (GIS)
 - **대상 DBMS**: PostgreSQL (+ pgvector), 캐시: Redis
-- **문서 버전**: v6.2 (§15 이상행동 감지(ARRIVAL_DELAY/UNREGISTERED_STAY) + /explain 확장 반영, 2026-09-14)
+- **문서 버전**: v6.3 (§15.6 AnomalyScheduler 구현 확정 + idx_pas_day 인덱스 반영, 2026-09-16)
 - **전제**: 포트폴리오 프로젝트이나, 실 서비스 운영 시 수십만~수백만 사용자·수억 건의 위치 데이터를 처리하는 상황을 가정하여 설계
 
 본 문서는 데이터베이스 스키마·저장 전략·권한 모델의 DB 반영을 담당한다. 인증/인가 상세 정책은 Security Guide, 예외 처리는 Exception Handling Rule, API 응답 형식은 API Response Rule, 로그 보관·마스킹은 Logging Guide를 따르며 본 문서에서 재정의하지 않는다.
@@ -464,6 +464,12 @@ GuardianTarget 카디널리티 및 Place 등록 권한 범위는 이전 [결정 
 | ChatEmbedding | idx_chat_embedding_hnsw | embedding | HNSW (vector_cosine_ops) | 유사 질문 벡터 검색 (RAG) |
 | ArrivalHistory | idx_ah_user_confirmed (신규) | (user_id, confirmed_at DESC) | Composite B-Tree | 도착 확인 이력 조회 (2026-08 도착 확인/긴급 연락 세션) |
 | ArrivalHistory | idx_ah_place (신규) | place_id | B-Tree | FK 대상 컬럼 — place_id가 NOT NULL이라 idx_vh_place와 달리 Partial이 아니다 |
+| PlaceArrivalSchedule | uq_pas_place_day (§15.1) | (place_id, day_of_week) | UNIQUE Composite B-Tree | 장소·요일 중복 스케줄 방지 겸 place_id 선두 조회 지원 |
+| PlaceArrivalSchedule | **idx_pas_day (신규, 2026-09-16)** | (day_of_week, place_id) | Composite B-Tree | `AnomalyScheduler` 역할1이 "오늘 요일에 등록된 스케줄 전체"를 조회하는 패턴 — uq_pas_place_day는 place_id가 선두라 이 조회에 못 쓰여 별도 추가(§15.1) |
+| AnomalyEvent | idx_ae_user_type_detected (§15.2) | (user_id, type, detected_at DESC) | Composite B-Tree | §1.6 목록 조회 + `/explain` 최근 N일 집계 공용 |
+| AnomalyEvent | idx_ae_place (§15.2) | place_id | Partial (WHERE place_id IS NOT NULL) | FK 대상 컬럼, nullable이라 Partial |
+| AnomalyEvent | idx_ae_open_unescalated (§15.2, 2026-09-16 용도 재정의) | escalated_at | Partial (WHERE resolved_at IS NULL) | `AnomalyScheduler` 역할2(승격)가 "진행 중인 이벤트 전체"를 스캔하는 데 재사용 — §4.2 확정(A)으로 "미승격"이 아니라 "진행 중" 전체가 스캔 대상이 되었으나, WHERE 절(resolved_at IS NULL)이 그대로 일치해 인덱스 신설 없이 재사용 가능 |
+| NotificationHistory | idx_nh_anomaly_event (§15.2) | anomaly_event_id | Partial (WHERE anomaly_event_id IS NOT NULL) | `AnomalyScheduler` 역할2가 "이 Guardian이 이미 통지받았는지" Guardian별로 개별 판단하는 데 사용(§4.2 확정: A) |
 
 **공통 원칙**: (1) 복합 인덱스는 선택도(Cardinality)가 높은 컬럼을 앞에 배치, (2) "삭제되지 않은 것만/특정 상태만" 조회되는 경우 Partial Index 적극 활용, (3) 쓰기가 압도적인 테이블은 인덱스를 최소로 유지, (4) PostgreSQL은 FK에 자동으로 인덱스를 생성하지 않으므로 모든 FK 대상 컬럼에 명시적 인덱스 필요.
 
@@ -679,6 +685,11 @@ Guardian이 등록하는 요일별(`day_of_week`, ISO 1=월~7=일) 예상 도착
   않을 만큼 촘촘하되, 매 tick마다 전체 CareTarget을 스캔하는 부담을 고려한 절충값(검증 v2 §2.2 근거).
 - 한 CareTarget이 하루 여러 Place에 스케줄을 가지면 `AnomalyEvent`가 동시에 여러 건 진행 중일 수 있다 —
   Place별로 독립된 이벤트이므로 문제없다(검증 v2 §2.2 결론).
+- **인덱스(2026-09-16 추가)**: `idx_pas_day(day_of_week, place_id)` — `AnomalyScheduler` 역할1이 "오늘
+  요일에 등록된 스케줄 전체"를 조회하는데, 기존 `uq_pas_place_day(place_id, day_of_week)`는 place_id가
+  선두라 이 조회 패턴을 지원하지 못해 별도로 추가했다(§4.2 확정: D). 이 조회는 대규모 운영 기준에서 전체
+  CareTarget 수에 비례해 커질 수 있는 유일한 스캔이라(승격/PAUSED 복귀 스캔은 "진행 중인 것"만 대상이라
+  작게 유지됨), `anomaly.arrival-delay-scan-page-size`(기본 1000)로 Pageable 청크 처리도 함께 도입했다.
 
 ### 15.2 AnomalyEvent (신규, Time-Series — 파티셔닝 조건부 권장, 현 단계 미적용)
 
@@ -703,7 +714,10 @@ AnomalyEvent에 대한 것인지" 추적할 방법이 없었다).
 - `place_id`(nullable, `ON DELETE SET NULL`): `ARRIVAL_DELAY`는 지연된 예정 장소, `UNREGISTERED_STAY`는
   근접한 등록 장소(있으면) 참고용.
 - `latitude`/`longitude`(nullable): `UNREGISTERED_STAY`만 채운다(미등록 위치 자체가 좌표로만 특정되므로).
-- `escalated_at`(nullable): HYBRID/REALTIME이 승격 알림을 발송한 시각. `resolved_at`(nullable): 정상
+- `escalated_at`(nullable): **"최초 승격 시각"(정보/표시용)** — 2026-09-16(§4.2 확정: A) 재정의. 같은
+  이벤트에 Guardian이 여러 명이고 각자 `escalate_minutes`가 다르면 승격이 Guardian별로 서로 다른 시점에
+  개별로 일어날 수 있어, 이 컬럼은 "누가 이미 통지받았는지"를 판별하는 스캔 필터로 쓰지 않는다(그 판별은
+  `NotificationHistory.anomaly_event_id`로 한다, §15.4/§15.6). `resolved_at`(nullable): 정상
   도착(ARRIVAL_DELAY) 또는 이탈/등록 장소 진입(UNREGISTERED_STAY) 확인 시각.
 - 파티셔닝은 VisitHistory/NotificationHistory와 동일하게 "조건부 권장, 현 단계 미적용" — 발생 빈도가
   LocationHistory보다 훨씬 낮다(위치 수신마다가 아니라 실제 이상 감지 시에만 생성).
@@ -743,3 +757,36 @@ AnomalyEvent에 대한 것인지" 추적할 방법이 없었다).
   실시간 알림도 가는 중복 노출을 어떻게 다룰지는 아직 결정하지 않았다 — 구현 시점에 사용자 확인 필요.
 - `AnomalyEvent`의 장기 보관 기간 정책(§7.2에 준하는 별도 기준)은 아직 정의하지 않았다 — 운영 데이터가
   쌓이기 전까지는 우선순위가 낮다고 판단해 이번 확정 범위에서 제외.
+
+### 15.6 AnomalyScheduler 구현 확정 (2026-09-16, §4.2)
+
+3가지 책임(ARRIVAL_DELAY 감지/승격/PAUSED 자동 복귀)을 하나의 tick(`AnomalyScheduler`)이 처리하도록
+구현하면서 §15.1~§15.5에 없던 아래 사항들을 확정했다.
+
+- **승격(A) — Guardian별 개별 판단**: §15.2에서 재정의한 대로, `escalated_at`은 최초 승격 시각만 남기고
+  "이 Guardian이 이미 통지받았는지"는 `NotificationHistory.anomaly_event_id` 존재 여부로 판별한다. 대안
+  (여러 Guardian 중 가장 짧은 `escalate_minutes` 기준으로 한 번에 승격)도 검토했으나, §15.3이 이미 확정한
+  "Guardian 개인별 설정" 원칙(느리게 설정한 Guardian이 빠른 Guardian 때문에 원치 않는 시점에 알림받지
+  않음)을 지키는 쪽을 택했다. 대가로 승격 스캔이 `escalated_at IS NULL`이 아니라 "진행 중인 이벤트 전체"를
+  훑어야 한다(비용 증가, 이상행동 발생 빈도 자체가 낮아 감내 가능하다고 판단).
+- **트랜잭션/외부 호출 분리(B)**: "승격 대상 확정 + AnomalyEvent 갱신"과 "FCM 발송"을 분리하되, 이번
+  구현에서는 명시적 `@Transactional` 경계를 두지 않는 방식을 택했다 — Spring Data JPA가 개별 조회/저장
+  메서드에 이미 걸어둔 짧은 트랜잭션에 의존하고, FCM 호출은 그 사이에서 어떤 트랜잭션에도 감싸이지 않는다
+  (`AnomalyScheduler`/`NotificationDispatchService.dispatchAnomalyEscalation` Javadoc 참고). **이 과정에서
+  기존 `NotificationDispatchService.dispatchArrival()`이 이미 트랜잭션 안에서 FCM을 직접 호출하고 있어
+  이 원칙과 어긋나 있음을 발견했다** — 이번 범위에서는 수정하지 않고 별도 이슈로 남긴다.
+- **실패 심각도(C)**: 이상행동 알림 발송 실패는 `EMERGENCY_*`급 fail-safe(재시도+별도 경보)가 아니라 기존
+  `dispatchArrival()`(GeoFence 도착 알림)과 동일한 낮은 심각도로 처리한다 — `status=FAILED` 이력만 남기고
+  예외/재시도 없음. CareTarget이 직접 트리거하는 게 아니라 백그라운드 스케줄러가 만드는 알림이고, 푸시가
+  실패해도 `AnomalyEvent`/§1.6 목록 API/`/summary`로 Guardian이 여전히 확인 가능해 푸시가 유일한 통지
+  경로가 아니라는 점이 EMERGENCY와 다르다.
+- **스캔 규모(D)**: 역할2(승격)/역할3(PAUSED 복귀)는 "진행 중인 이벤트"/"현재 PAUSED인 Guardian"만
+  스캔해 전체 사용자 규모와 무관하게 작게 유지되므로 청크 처리를 도입하지 않았다. 역할1(ARRIVAL_DELAY
+  감지)만 전체 사용자 규모에 비례해 커질 수 있어 `idx_pas_day` 인덱스(§15.1) + `Pageable` 청크
+  (`anomaly.arrival-delay-scan-page-size`, 기본 1000) + Redis 분산 락(`anomaly:scheduler:lock`,
+  Cache_Strategy_Guide.md §3.2)을 상용화 대비 수준으로 함께 도입했다. 분산 락은 현재 단일 인스턴스
+  배포에서는 실질 효과가 없으나, 수평 확장 시 여러 인스턴스가 같은 tick을 동시 실행해 알림이 중복
+  발송되는 것을 막기 위한 멱등성 방어 로직을 미리 설계해둔 것이다.
+- 알림의 비동기/배치 발송 전환(`@Async`/메시지 큐 등으로의 전환)은 이번 범위 밖이다 — 현재는 승격 대상을
+  순차 동기 호출로 처리한다. 도입 여부는 `.claude/rules/collaboration.md`의 "비동기 처리 도입 여부" 기준에
+  따라 별도 세션에서 트레이드오프를 제시하고 결정할 로드맵 항목으로 남긴다.

@@ -123,12 +123,14 @@ Redis          PostgreSQL
 | 초대 코드 입력 실패 카운터 | `invite:fail:{token}` | 10분(원본 토큰과 동일 수명) | 5회 도달 시 원본 토큰과 함께 즉시 삭제 | **Redis** |
 | CareTarget 진행 중 이상행동 여부 | `anomaly:active:{careTargetId}:{type}` | 5분 | 감지/해결(도착·이탈) 시 즉시 갱신 또는 삭제 | PostgreSQL(AnomalyEvent) |
 | UNREGISTERED_STAY 감지 전 "머무는 중" 후보(anchor) | `anomaly:candidate:{careTargetId}` (value: `{lat, lng, startedAt}`) | 15분(`anomaly.unregistered-stay-detect-minutes` 기본 10분 + 5분 여유) | 반경 이탈 시 새 후보로 덮어쓰기(startedAt도 새로 설정), 감지 완료(AnomalyEvent 생성) 시 즉시 삭제 | **Redis**(아래 각주 — fail-open 허용 예외) |
+| AnomalyScheduler 분산 락 | `anomaly:scheduler:lock` (value: 실행 인스턴스 임의 UUID) | `anomaly.scheduler.lock-ttl-minutes`(기본 4분, tick 주기 5분보다 짧게) | tick 완료 시 소유자(value) 일치할 때만 즉시 삭제, TTL 자연 만료가 최종 안전망 | **Redis 전용**(아래 각주 — fail-open 허용 예외) |
 
 > `location:latest:{careTargetId}`처럼 API_Response_Rule.md 예시에서 `careTargetId`를 `public_id`(UUID)로 쓰기로 한 정책과 캐시 키 표기를 일치시켰다.
 > `place:list:{guardianId}`는 `{targetId}`로 수정됐다(2026-08) — Place 목록 조회가 `GET /api/guardian/places?careTargetId={id}`로 CareTarget 기준 조회가 되면서(Guardian이 여러 CareTarget을 관리할 수 있어 Guardian 기준 캐시로는 특정 CareTarget의 목록을 가리킬 수 없었음, `Place.target_id` 컬럼 추가와 동일한 이유), 캐시 키도 조회 축과 일치시켰다.
 > 초대 관련 4개 키는 `domain/guardian` Phase 1 구현 시 추가됐다. `invite:pending:{careTargetId}`는 DATABASE_DESIGN_GUIDE.md §3.2가 명시한 `invite:token:{token}` 단일 키만으로는 CareTarget이 "나에게 걸린 대기 요청 목록"을 조회할 방법이 없어(토큰 값을 모르므로 직접 조회 불가) 보조 색인으로 추가한 것이며, Source of Truth는 여전히 `invite:token:{token}`이다 — field별 TTL을 걸지 않고 조회/승인/거절 시점에 원본 토큰 존재 여부로 유효성을 재확인(지연 무효화)한다.
 > `anomaly:active:{careTargetId}:{type}`는 이상행동 감지 기능(2026-09-14, DATABASE_DESIGN_GUIDE.md §15) 추가 시 등록됐다. `UnregisteredStayDetector`/`GeoFenceService`가 매 위치 수신마다 "이 CareTarget이 지금 진행 중인 이상행동이 있는지"를 확인하는데, 이 조회를 매번 DB로 하면 위치 수신 빈도(실시간 추적)를 고려할 때 부담이 크다(검증 v2 §2.3 지적 반영). 값은 열려 있는 `AnomalyEvent.id`(문자열) — 존재 여부만 필요하고 상세 필드는 캐시에 담지 않는다(캐시가 stale해도 최악의 경우 DB로 재조회하는 정도의 리스크만 지도록). TTL 5분은 감지 기준(`anomaly.unregistered-stay-detect-minutes` 기본 10분)보다 짧게 잡아, 캐시가 갱신 없이 방치돼도 실제 상태와 크게 어긋나지 않게 한다(§4 "재계산/재조회 비용" 기준 — DB 폴백 비용이 낮아 TTL을 길게 가져갈 이유가 없다). `{type}`을 키에 포함한 이유는 ARRIVAL_DELAY/UNREGISTERED_STAY가 같은 CareTarget에 동시에 진행 중일 수 있어(§15.1) 하나의 키로 합치면 서로 덮어쓰기 때문이다.
 > `anomaly:candidate:{careTargetId}`도 같은 기능 추가 시 등록됐다. `UNREGISTERED_STAY`는 임계값(기본 10분)을 넘기기 전까지 "머무는 중"이라는 감지 이전 상태를 어딘가에 들고 있어야 하는데, 이 상태를 매 위치 수신마다 `LocationHistory` range 쿼리로 재계산하면(대안 검토됨) 위치 수신이 잦은 CareTarget마다 반복적인 DB 조회가 발생해 비용/성능 부담이 크다 — Redis O(1) 비교로 대체해 GeoFenceService의 기존 Place 캐시 조회 패턴과 동일한 "핫 패스는 Redis로" 원칙을 따른다. PostgreSQL에 대응 데이터가 전혀 없으므로 분류상 §6 "Redis가 Source of Truth"인 데이터(`location:latest`, FCM Token과 동일 범주)에 속한다. 다만 같은 범주라도 취급은 다르다 — Refresh Token/JWT Blacklist는 폴백 없이 명시적 503으로 fail-safe 처리하는 반면(§7), 이 캐시는 유실 시 fail-open을 허용한다: 유실돼도 다음 위치 수신 시 새 후보로 자동 재시작되어 "머문 시간 카운트가 리셋"되는 정도의 열화만 발생할 뿐, 이미 감지된 `AnomalyEvent`(PostgreSQL Source of Truth)나 `EMERGENCY_*`류의 fail-safe 필수 대상에는 영향이 없기 때문이다. `startedAt`은 반경 내 재진입 시 갱신하지 않고 최초 진입 시각을 그대로 유지한다 — 반경을 벗어났다 다시 들어와도 "머문 시간"이 리셋되지 않게 하려는 것이 아니라, 반경 이탈 자체가 새 후보 교체 조건이므로(같은 반경 안에서는 "재진입"이라는 개념이 없다) 후보가 살아있는 동안은 항상 최초 anchor 시각이 곧 "이 머무름이 시작된 시각"이기 때문이다.
+> `anomaly:scheduler:lock`은 이상행동 스케줄러(§4.2, `AnomalyScheduler`)가 단일 tick 안에서 3가지 책임(ARRIVAL_DELAY 감지/승격/PAUSED 자동 복귀)을 모두 처리하는 동안 다른 인스턴스가 같은 tick을 동시에 실행하지 못하게 막는 분산 락이다. 현재는 단일 인스턴스 배포라 실질적인 동시 실행 위험이 없지만, 수평 확장을 염두에 둔 멱등성 방어 로직을 미리 마련해뒀다(DATABASE_DESIGN_GUIDE.md §15.1). Redis 락 자체를 획득하지 못하면(다른 인스턴스가 보유 중) 이번 tick을 통째로 건너뛰고, Redis 장애로 락 획득 자체가 실패하면(예외) 반대로 락 없이도 진행한다 — 단일 인스턴스 환경에서는 락 부재가 실제 위험이 아니므로, "락이 안 걸려서 이상행동 감지 자체가 멈추는" 상황을 더 나쁜 결과로 판단했다(fail-open, `anomaly:candidate`와 동일한 예외 취급). TTL(기본 4분)을 tick 주기(5분)보다 짧게 잡아 실행이 비정상 종료돼도 다음 tick 전에 락이 자연 해제된다.
 
 ---
 
@@ -165,7 +167,7 @@ TTL 값을 정할 때는 아래 3가지 기준으로 판단하고, 근거 없이
 
 | 유형 | 설명 | 해당 데이터 | 장애 시 영향 |
 |---|---|---|---|
-| Redis가 Source of Truth | DB는 이력 보관용이고, "지금 값"은 Redis에만 있다 | 최신 위치, FCM Token, Refresh Token, JWT Blacklist, UNREGISTERED_STAY 감지 후보(`anomaly:candidate`) | Redis 장애 시 이 데이터의 "현재 상태"를 잃는다 — 단순 캐시 미스가 아니라 실제 데이터 유실이므로 7장 원칙에 따라 다르게 처리한다(단, `anomaly:candidate`는 7장의 fail-open 예외 적용) |
+| Redis가 Source of Truth | DB는 이력 보관용이고, "지금 값"은 Redis에만 있다 | 최신 위치, FCM Token, Refresh Token, JWT Blacklist, UNREGISTERED_STAY 감지 후보(`anomaly:candidate`), AnomalyScheduler 분산 락(`anomaly:scheduler:lock`) | Redis 장애 시 이 데이터의 "현재 상태"를 잃는다 — 단순 캐시 미스가 아니라 실제 데이터 유실이므로 7장 원칙에 따라 다르게 처리한다(단, `anomaly:candidate`/`anomaly:scheduler:lock`은 7장의 fail-open 예외 적용) |
 | PostgreSQL이 Source of Truth | Redis는 단순 가속용, 캐시가 사라져도 DB에서 다시 채우면 된다 | Place 목록, CareTarget 정보, GeoFence, CareTarget 진행 중 이상행동 여부 | Redis 장애 시 DB로 폴백하면 그만이며 데이터 유실이 아니다 |
 | 캐시 전용(재생성 가능) | 원본이 없거나, 있어도 재계산 비용을 아끼는 목적뿐 | AI 예측, LLM 응답, Google Places 결과 | 캐시가 사라지면 다시 계산/호출하면 되므로 정합성 리스크가 가장 낮다 |
 
@@ -182,7 +184,7 @@ Redis 장애 시의 구체적인 예외 처리 코드/HTTP Status는 **Exception
 | PostgreSQL이 Source of Truth인 캐시(Place, CareTarget 정보 등) | 예외를 던지지 않고 DB 원본 조회로 자동 폴백한다 |
 | 캐시 전용 데이터(AI 예측, LLM 응답, Google Places) | 폴백 대상이 재계산/재호출이므로 마찬가지로 예외 없이 원본 로직 재실행 |
 | Redis가 Source of Truth인 세션/보안 데이터(Refresh Token, JWT Blacklist) | 폴백이 불가능하므로 명시적으로 실패 처리(503)한다. 인증 상태를 임의로 "성공"으로 간주하지 않는다(보안 원칙 우선) |
-| Redis가 Source of Truth이지만 fail-open이 허용되는 예외(`anomaly:candidate`) | 위 항목과 같은 분류(Redis-SoT)지만 성격이 다르다 — 감지 전 임시 상태일 뿐이라 유실돼도 다음 위치 수신 시 자동으로 다시 시작된다. 예외를 던지지 않고 조용히 넘어간다(§3.2 각주, 2026-09-14 이상행동 감지 기능에서 신설) |
+| Redis가 Source of Truth이지만 fail-open이 허용되는 예외(`anomaly:candidate`, `anomaly:scheduler:lock`) | 위 항목과 같은 분류(Redis-SoT)지만 성격이 다르다 — 감지 전 임시 상태·분산 락 모두 유실돼도 자동으로 복구/재시작된다(다음 위치 수신 시 새 후보, 락 없이도 진행). 예외를 던지지 않고 조용히 넘어간다(§3.2 각주, 2026-09-14/2026-09-16 이상행동 감지 기능에서 신설) |
 
 ---
 
