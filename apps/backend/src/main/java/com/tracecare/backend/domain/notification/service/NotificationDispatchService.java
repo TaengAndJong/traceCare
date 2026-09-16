@@ -2,11 +2,11 @@ package com.tracecare.backend.domain.notification.service;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import com.tracecare.backend.common.exception.business.CareTargetNotFoundException;
 import com.tracecare.backend.domain.anomaly.entity.AnomalyEvent;
@@ -29,6 +29,15 @@ import com.tracecare.backend.domain.place.repository.PlaceRepository;
  * {@code status=FAILED}로 이력만 남기고 예외를 던지지 않는다. Exception_Handling_Rule.md §9.2의 EMERGENCY
  * fail-safe(재시도/사용자에게 실패 자체를 알림)는 긴급 연락(`POST /api/care-target/emergency/call`, 사용자가 직접 트리거하고 응답을
  * 기다리는 동기 흐름) 전용 요구사항이라 이번 범위(GeoFence 도착, 비동기 백그라운드 흐름)에는 적용하지 않는다 — 이 판단 근거는 결과 보고에도 남긴다.
+ *
+ * <p><b>트랜잭션 경계(버그 수정, 2026-09-16)</b>: 예전에는 {@link #dispatchArrival}이 메서드 전체를 {@code
+ * @Transactional}로 감싸 그 안에서 {@link FcmSender#send}(외부 I/O)까지 호출했다 — {@code database.md}의
+ * "트랜잭션 내부에서 외부 API 호출 금지" 원칙 위반이었고, 여러 Guardian을 순회하는 도중 한 Guardian 처리에서 예외가 나면
+ * 이미 저장된 다른 Guardian의 {@code NotificationHistory}까지 같은 트랜잭션이라 함께 롤백될 위험이 있었다(GeoFence로
+ * 저장되는 {@code VisitHistory} 자체는 {@code VisitNotificationListener}가 {@code AFTER_COMMIT}에서만
+ * 반응하므로 애초에 영향 밖이었다). {@link #sendAndRecord}로 "FCM 호출 → 결과 저장"을 공통 추출하면서 이 클래스
+ * 어디에도 {@code @Transactional}을 두지 않는 방식(§4.2 확정: B, {@link #dispatchAnomalyEscalation}과 동일
+ * 구조)으로 통일했다 — Guardian별 저장이 Spring Data JPA의 호출 단위 트랜잭션으로 각각 독립적으로 커밋된다.
  */
 @Service
 public class NotificationDispatchService {
@@ -54,8 +63,12 @@ public class NotificationDispatchService {
         this.fcmSender = fcmSender;
     }
 
-    /** ACTIVE Guardian 전원(PRIMARY+SUB)에게 개별 행을 생성한다 — 같은 트리거는 동일 {@code event_id}로 묶는다. */
-    @Transactional
+    /**
+     * ACTIVE Guardian 전원(PRIMARY+SUB)에게 개별 행을 생성한다 — 같은 트리거는 동일 {@code event_id}로 묶는다.
+     * {@code @Transactional}을 의도적으로 붙이지 않는다(클래스 Javadoc "트랜잭션 경계" 참고) — Guardian별
+     * {@link #sendAndRecord} 호출이 각각 독립적으로 FCM 발송 후 저장되어, 한 Guardian 처리 중 예외가 나도 그 이전에
+     * 이미 저장된 다른 Guardian의 이력은 롤백되지 않는다.
+     */
     public void dispatchArrival(Long careTargetId, String placeName) {
         List<GuardianTarget> guardians =
                 guardianTargetRepository.findByTargetIdAndStatus(
@@ -71,43 +84,27 @@ public class NotificationDispatchService {
         UUID eventId = UUID.randomUUID();
 
         for (GuardianTarget guardianTarget : guardians) {
-            sendToGuardian(
-                    guardianTarget.getGuardianId(), careTargetId, eventId, title, body, placeName);
-        }
-    }
-
-    private void sendToGuardian(
-            Long guardianId,
-            Long targetId,
-            UUID eventId,
-            String title,
-            String body,
-            String placeName) {
-        NotificationHistory notification =
-                NotificationHistory.create(
-                        guardianId, targetId, NotificationHistory.TYPE_ARRIVAL, eventId, placeName);
-
-        boolean sent = fcmSender.send(guardianId, title, body);
-        if (!sent) {
-            notification.markFailed();
-            log.warn(
-                    "event=NOTIFICATION_SEND_FAILED, guardianId={}, targetId={}, type={}",
+            Long guardianId = guardianTarget.getGuardianId();
+            sendAndRecord(
                     guardianId,
-                    targetId,
-                    NotificationHistory.TYPE_ARRIVAL);
+                    NotificationHistory.TYPE_ARRIVAL,
+                    title,
+                    body,
+                    () ->
+                            NotificationHistory.create(
+                                    guardianId,
+                                    careTargetId,
+                                    NotificationHistory.TYPE_ARRIVAL,
+                                    eventId,
+                                    placeName));
         }
-        notificationHistoryRepository.save(notification);
     }
 
     /**
-     * {@code AnomalyScheduler} 역할2(승격) 전용(§4.2 확정: B). 의도적으로 {@code @Transactional}을 이 메서드에
-     * 붙이지 않는다 — {@link #dispatchArrival}처럼 메서드 전체를 하나의 트랜잭션으로 감싸면 그 안에서 호출하는 {@link
-     * FcmSender#send}(외부 I/O)까지 트랜잭션에 포함돼 {@code database.md}의 "트랜잭션 내부에서 외부 API 호출 금지"
-     * 원칙과 어긋난다(실제로 {@link #dispatchArrival}이 이미 이 문제를 갖고 있음을 이번에 발견했다 — 이번 범위에서는
-     * 고치지 않고 별도 이슈로만 남긴다). 이 메서드는 그 문제를 새로 만들지 않기 위해 트랜잭션을 아예 선언하지 않고, 대신
-     * {@code placeRepository}/{@code userRepository}/{@code notificationHistoryRepository}의 개별 호출이
-     * Spring Data JPA({@code SimpleJpaRepository})가 각 메서드에 이미 걸어둔 짧은 트랜잭션에 의존한다 — 조회 2번,
-     * FCM 호출(트랜잭션 밖), 저장 1번이 각각 별도의 짧은 트랜잭션으로 실행되는 구조다.
+     * {@code AnomalyScheduler} 역할2(승격) 전용(§4.2 확정: B) — {@code @Transactional} 없이 {@link
+     * #sendAndRecord}(클래스 Javadoc "트랜잭션 경계" 참고)에 의존한다. EMERGENCY_*와 달리 재시도/별도 경보 없이
+     * 이력만 남긴다 — Guardian은 AnomalyEvent 목록/ /summary로 여전히 확인 가능해 푸시가 유일한 통지 경로가 아니다
+     * (§4.2 확정: C, dispatchArrival과 동일한 낮은 심각도).
      */
     public void dispatchAnomalyEscalation(AnomalyEscalationTarget target) {
         String placeName = resolvePlaceName(target.placeId());
@@ -115,25 +112,43 @@ public class NotificationDispatchService {
         String title = buildEscalationTitle(target.anomalyType());
         String body = buildEscalationBody(target.anomalyType(), targetName, placeName);
 
-        boolean sent = fcmSender.send(target.guardianId(), title, body);
+        sendAndRecord(
+                target.guardianId(),
+                target.anomalyType(),
+                title,
+                body,
+                () ->
+                        NotificationHistory.createForAnomaly(
+                                target.guardianId(),
+                                target.careTargetId(),
+                                UUID.randomUUID(),
+                                placeName,
+                                target.anomalyEventId()));
+    }
 
-        NotificationHistory notification =
-                NotificationHistory.createForAnomaly(
-                        target.guardianId(),
-                        target.careTargetId(),
-                        UUID.randomUUID(),
-                        placeName,
-                        target.anomalyEventId());
+    /**
+     * "FCM 호출(트랜잭션 밖) → 결과를 NotificationHistory로 저장(짧은 트랜잭션)"이라는 공통 3단계 흐름을 한 곳에
+     * 모은다(Coding_Convention.md §1.3 "공유 로직은 한 곳에", {@link #dispatchArrival}/{@link
+     * #dispatchAnomalyEscalation}이 공유). {@code notificationFactory}는 도메인별로 다른 {@code
+     * NotificationHistory} 팩토리 메서드({@link NotificationHistory#create}/{@link
+     * NotificationHistory#createForAnomaly})를 호출부가 넘긴다 — FCM 발송 이후에 생성해야 실패 시 {@link
+     * NotificationHistory#markFailed()}를 곧바로 적용할 수 있다.
+     */
+    private void sendAndRecord(
+            Long guardianId,
+            String notificationType,
+            String title,
+            String body,
+            Supplier<NotificationHistory> notificationFactory) {
+        boolean sent = fcmSender.send(guardianId, title, body);
+
+        NotificationHistory notification = notificationFactory.get();
         if (!sent) {
             notification.markFailed();
-            // EMERGENCY_*와 달리 재시도/별도 경보 없이 이력만 남긴다 — Guardian은 AnomalyEvent 목록/
-            // /summary로 여전히 확인 가능해 푸시가 유일한 통지 경로가 아니다(§4.2 확정: C, dispatchArrival과
-            // 동일한 낮은 심각도).
             log.warn(
-                    "event=ANOMALY_NOTIFICATION_SEND_FAILED, guardianId={}, anomalyEventId={}, type={}",
-                    target.guardianId(),
-                    target.anomalyEventId(),
-                    target.anomalyType());
+                    "event=NOTIFICATION_SEND_FAILED, guardianId={}, type={}",
+                    guardianId,
+                    notificationType);
         }
         notificationHistoryRepository.save(notification);
     }
