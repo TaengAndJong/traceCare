@@ -320,7 +320,7 @@ VisitHistory 기준(가공된 "방문 단위" 데이터). 원본 GPS 좌표 나�
 | `status` | string | `ONGOING`(`resolved_at`이 null) / `RESOLVED`. 서버가 계산해 내려준다 |
 | `detectedAt` | string(ISO-8601 Instant) | 감지 시각 |
 | `resolvedAt` | string, nullable | 해제 시각. 진행 중이면 null |
-| `placeId` | string(UUID), nullable | 관련 Place의 `public_id`(Master Data라 내부 PK를 노출하지 않는다). `ARRIVAL_DELAY`는 지연된 예정 장소, `UNREGISTERED_STAY`는 감지 시점에 가장 가까웠던 등록 장소(있으면) |
+| `placeId` | string(UUID), nullable | 관련 Place의 `public_id`(Master Data라 내부 PK를 노출하지 않는다). `ARRIVAL_DELAY`는 지연된 예정 장소, `UNREGISTERED_STAY`는 감지 시점에 가장 가까웠던 등록 장소(있으면). **Soft Delete된 Place는 null**(`placeName`과 동일하게 처리하며, 문자열 기본값을 넣지 않는다) |
 | `placeName` | string, nullable | 조회 시 페이지의 Place를 `IN` 쿼리로 일괄 조회해 채운다(스냅샷 컬럼 아님, N+1 없음). **Soft Delete된 Place는 null** |
 | `latitude`/`longitude` | number, nullable | `UNREGISTERED_STAY`에서만 값이 있다 |
 
@@ -349,21 +349,23 @@ VisitHistory 기준(가공된 "방문 단위" 데이터). 원본 GPS 좌표 나�
 
 | 유형 | `questionKey` | `text` |
 |---|---|---|
-| `ARRIVAL_DELAY` | `DELAY_REASON` | 왜 감지됐나요? |
-| `ARRIVAL_DELAY` | `DELAY_EXPECTED_TIME` | 원래 도착 예정 시각은 언제였나요? |
-| `ARRIVAL_DELAY` | `DELAY_DURATION` | 현재까지 얼마나 지연됐나요? |
-| `ARRIVAL_DELAY` | `DELAY_CURRENT_LOCATION` | 지금 어디에 있나요? |
-| `ARRIVAL_DELAY` | `DELAY_LAST_VISIT` | 이 장소를 마지막으로 방문한 때는 언제인가요? |
-| `ARRIVAL_DELAY` | `DELAY_COUNT_7D` | 최근 7일간 몇 번 지연됐나요? |
-| `ARRIVAL_DELAY` | `DELAY_COUNT_30D` | 최근 30일간 몇 번 지연됐나요? |
-| `UNREGISTERED_STAY` | `STAY_REASON` | 왜 감지됐나요? |
-| `UNREGISTERED_STAY` | `STAY_LOCATION` | 정확한 위치는 어디인가요? |
-| `UNREGISTERED_STAY` | `STAY_STARTED_AT` | 언제부터 머물렀나요? |
-| `UNREGISTERED_STAY` | `STAY_ELAPSED` | 얼마나 머물렀나요? |
-| `UNREGISTERED_STAY` | `STAY_ONGOING` | 지금도 머물고 있나요? |
-| `UNREGISTERED_STAY` | `STAY_NEAREST_PLACE_DISTANCE` | 가장 가까운 등록 장소까지 얼마나 떨어져 있나요? |
-| `UNREGISTERED_STAY` | `STAY_COUNT_7D` | 최근 7일간 몇 번 발생했나요? |
-| `UNREGISTERED_STAY` | `STAY_SIMILAR_PAST` | 과거 비슷한 위치에서 10분 이상 머문 이력이 있나요? |
+| `ARRIVAL_DELAY` | `DELAY_REASON` | 왜 감지됐습니까? |
+| `ARRIVAL_DELAY` | `DELAY_EXPECTED_TIME` | 원래 도착 예정 시각은 언제였습니까? |
+| `ARRIVAL_DELAY` | `DELAY_DURATION` | 현재까지 얼마나 지연됐습니까? |
+| `ARRIVAL_DELAY` | `DELAY_CURRENT_LOCATION` | 지금 어디에 있습니까? |
+| `ARRIVAL_DELAY` | `DELAY_LAST_VISIT` | 이 장소를 마지막으로 방문한 때는 언제입니까? |
+| `ARRIVAL_DELAY` | `DELAY_COUNT_7D` | 최근 7일간 몇 번 지연됐습니까? |
+| `ARRIVAL_DELAY` | `DELAY_COUNT_30D` | 최근 30일간 몇 번 지연됐습니까? |
+| `UNREGISTERED_STAY` | `STAY_REASON` | 왜 감지됐습니까? |
+| `UNREGISTERED_STAY` | `STAY_LOCATION` | 정확한 위치는 어디입니까? |
+| `UNREGISTERED_STAY` | `STAY_STARTED_AT` | 언제부터 머물렀습니까? |
+| `UNREGISTERED_STAY` | `STAY_ELAPSED` | 얼마나 머물렀습니까? |
+| `UNREGISTERED_STAY` | `STAY_ONGOING` | 지금도 머물고 있습니까? |
+| `UNREGISTERED_STAY` | `STAY_NEAREST_PLACE_DISTANCE` | 가장 가까운 등록 장소까지 얼마나 떨어져 있습니까? |
+| `UNREGISTERED_STAY` | `STAY_COUNT_7D` | 최근 7일간 몇 번 발생했습니까? |
+| `UNREGISTERED_STAY` | `STAY_SIMILAR_PAST` | 과거 비슷한 위치에서 {N}분 이상 머문 이력이 있습니까? |
+
+질문 문구는 답변 문장과 같은 합니다체 의문형(~습니까?/~입니까?)이다. `STAY_SIMILAR_PAST`의 `{N}분`은 고정 문자열이 아니라 감지 기준 설정값(`anomaly.unregistered-stay-detect-minutes`, 기본 10분)이며, enum에는 자리표시자로 두고 **카탈로그 조회 시점에 채워서** 내려준다(답변 문장의 "N분 이상"과 항상 같은 값).
 
 #### `GET /api/guardian/anomalies/{anomalyEventId}/explain?question={questionKey}` — 이상행동 설명
 
@@ -379,8 +381,12 @@ VisitHistory 기준(가공된 "방문 단위" 데이터). 원본 GPS 좌표 나�
 **검증 순서**: ① `question` 누락 → `COMMON_002`(400) → ② 이벤트 없음 → `ANOMALY_001`(404) → ③ 호출자가 이 이벤트가 속한 CareTarget의 ACTIVE Guardian이 아님 → `TARGET_002`(403, `AccessDeniedCustomException`) → ④ `questionKey`가 카탈로그에 없거나 **이 이벤트의 `type`에 속하지 않는 키**(예: `ARRIVAL_DELAY` 이벤트에 `STAY_*` 키) → `ANOMALY_002`(400). 키 검증이 이벤트의 유형에 종속되므로 소유권 검증 뒤에 수행한다(소유자가 아닌 호출자는 키가 무엇이든 403을 받는다).
 
 **답변 조립 시 유의사항**
-- 시각은 서버 기본 타임존 기준 문장("M월 d일 HH:mm")으로 표기한다(프로젝트의 기존 관행, `AiChatService`와 동일).
-- 이 이벤트에 필요한 값이 없으면(예: Soft Delete된 Place, 스냅샷 컬럼이 추가되기 이전에 생성돼 `scheduled_at`/`stay_started_at`이 null인 이벤트) 에러가 아니라 "확인할 수 없어요"류의 안내 문장으로 답한다.
+- 시각은 서버 기본 타임존 기준 문장("yyyy년 M월 d일 HH:mm", 연도 포함)으로 표기한다(프로젝트의 기존 관행, `AiChatService`와 동일).
+- 답변 문장은 합니다체로 통일하고, 일반 사용자에게 노출되므로 "이벤트"라는 개발자 용어 대신 "이상행동"이라고 쓴다. "이 알림"이라는 표현은 쓰지 않는다(REPORT_ONLY 보호자는 푸시 알림을 받지 않기 때문).
+- 이 이상행동에 필요한 값이 없으면(예: Soft Delete된 Place, 스냅샷 컬럼이 추가되기 이전에 생성돼 `scheduled_at`/`stay_started_at`이 null인 이상행동) 에러가 아니라 "확인할 수 없습니다"류의 안내 문장으로 답한다. 질문마다 문구가 다르며 공통 문구 하나로 통일하지 않는다.
+- 집계 문장(`DELAY_COUNT_7D`/`DELAY_COUNT_30D`/`STAY_COUNT_7D`)은 이번 이상행동이 집계 창(지금 기준 최근 N일) 안에 있을 때만 "이번을 포함해"를 앞에 붙인다. 창보다 오래된 이상행동에는 붙이지 않는다.
+- `STAY_SIMILAR_PAST` 답변의 "N분 이상"은 감지 기준 설정값(`anomaly.unregistered-stay-detect-minutes`)을 그대로 쓴다. 같은 값이 카탈로그의 질문 문구에도 반영된다.
+- `DELAY_LAST_VISIT`는 장소 자체를 알 수 없는 경우(이상행동에 `place_id`가 없거나 Soft Delete로 Place가 조회되지 않음)에는 `DELAY_REASON`과 같은 패턴("이 이상행동에 연결된 장소 정보가 없어 방문 기록을 확인할 수 없습니다.")으로 답하고, 장소는 있는데 방문 이력만 없는 경우에는 "이 장소의 방문 기록이 아직 없습니다."로 구분해 답한다.
 - 좌표를 포함하는 답변(`DELAY_CURRENT_LOCATION`, `STAY_LOCATION`)이 있으나 **Audit Log는 이번 범위에 포함하지 않는다**(위치 노출 API 전체 공통 도입 로드맵 항목, Logging_Guide.md §12.1).
 
 성공 코드: `ANOMALY_002` · 주요 실패 코드: `ANOMALY_001`(404, 이벤트 없음), `ANOMALY_002`(400, 잘못된 질문 키), `TARGET_002`(403, 소유권 불일치), `COMMON_002`(400, `question` 누락)

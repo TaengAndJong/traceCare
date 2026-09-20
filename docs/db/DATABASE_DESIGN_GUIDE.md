@@ -839,7 +839,7 @@ AnomalyEvent에 대한 것인지" 추적할 방법이 없었다).
 - 마지막 두 질문("최근 N일 횟수", "과거 비슷한 위치 이력")만 선택된 이벤트 하나가 아니라 같은 유형/장소(또는 근접 좌표)의
   과거 여러 `AnomalyEvent`를 집계해서 답한다.
 - 답변에 필요한 값이 없으면(Soft Delete된 Place, 아래 스냅샷 컬럼 추가 이전에 생성돼 값이 null인 이벤트 등)
-  에러가 아니라 "확인할 수 없어요"류의 안내 문장으로 답한다.
+  에러가 아니라 "확인할 수 없습니다"류의 안내 문장으로 답한다.
 - `DELAY_LAST_VISIT`의 "마지막 방문"은 **이 이벤트가 가리키는 장소**의 가장 최근 방문으로 해석했다(v2 §1.5의 문구
   "마지막 방문 시각"이 어느 장소인지 명시하지 않아 이벤트 맥락에 맞게 정한 구현 세부다).
 
@@ -866,7 +866,7 @@ AnomalyEvent에 대한 것인지" 추적할 방법이 없었다).
 
 **F. "과거 비슷한 위치" — 원본은 과거 `UNREGISTERED_STAY` 이벤트뿐 (확정)**
 
-`STAY_SIMILAR_PAST`의 질문 문구는 **"과거 비슷한 위치에서 10분 이상 머문 이력이 있나요?"** 이다. 조회 대상은 과거
+`STAY_SIMILAR_PAST`의 질문 문구는 **"과거 비슷한 위치에서 {N}분 이상 머문 이력이 있습니까?"** 이다(`{N}`은 감지 기준 설정값 `anomaly.unregistered-stay-detect-minutes`, 기본 10분 — 카탈로그 조회 시점에 채운다). 조회 대상은 과거
 `AnomalyEvent`(`type=UNREGISTERED_STAY`)뿐이다 — `AnomalyEvent`는 감지 기준 이상 머문 경우에만 생성되므로 "10분 이상 머문
 이력"이라는 문구와 정확히 일치한다. `VisitHistory`에는 미등록 장소 방문이 생성되지 않고(`VisitHistory.arrive()`가
 `registeredPlace=true`를 고정하며 `GeoFenceService`가 등록 Place에 매칭될 때만 호출), `LocationHistory` 원본을 직접 분석하지도

@@ -347,12 +347,19 @@ URL 패턴 기반 권한 검사(`authorizeHttpRequests`)만으로는 **"같은 R
 ```java
 @PreAuthorize("hasRole('GUARDIAN')")
 @GetMapping("/api/guardian/care-targets/{id}")
-public ApiResponse<CareTargetResponse> getCareTarget(@PathVariable Long id) {
+public ApiResponse<CareTargetResponse> getCareTarget(
+        @AuthenticationPrincipal CustomUserDetails user,
+        @PathVariable Long id) {
     // Role 검증은 @PreAuthorize에서 선언적으로 처리
     // 리소스 소유권(요청자 Guardian ↔ id의 CareTarget 매핑 관계) 검증은 Service 계층에서 수행
-    return careTargetService.getCareTarget(SecurityUtils.getCurrentUserId(), id);
+    return careTargetService.getCareTarget(user.getUserId(), id);
 }
 ```
+
+> **[각주] 예시 정정 — `SecurityUtils.getCurrentUserId()` → `@AuthenticationPrincipal CustomUserDetails user`**
+> 이전 예시는 `SecurityUtils.getCurrentUserId()`로 사용자 ID를 꺼냈다. 이 방식은 `SecurityContextHolder`(스레드 로컬 기반)에서 값을 꺼내므로, 요청을 처리하던 스레드 안에서만 조회가 가능하다. 이 프로젝트는 `AnomalyScheduler`(§4.2)처럼 스케줄러/백그라운드 처리가 이미 있고, 앞으로 `@Async`나 별도 스레드풀로 넘어가는 로직이 늘어날 수 있는데, 그런 경우 원래 요청 스레드가 아니므로 `SecurityUtils`가 사용자 정보를 못 찾아 null을 반환하거나 예외가 발생할 수 있다. `@AuthenticationPrincipal`은 요청 처리 시점에 메서드 파라미터로 사용자 정보를 미리 주입받아 갖고 있는 방식이라, 이후 로직이 비동기로 넘어가더라도 이미 확보해둔 값을 그대로 넘겨 쓸 수 있어 이 문제가 생기지 않는다. **보안 수준 차이가 아니라 스레드 안전성과 향후 비동기 확장성을 고려한 정정**이다. `Coding_Convention.md` §6의 표현("인증된 사용자 정보는 `@AuthenticationPrincipal CustomUserDetails user`로만 받는다")과도 통일한다.
+>
+> 기존 컨트롤러(현재 `SecurityUtils.getCurrentUserId()`를 쓰는 15개)의 실제 전환은 이번 범위가 아니며, 별도 리팩터링 세션 로드맵 항목으로 다룬다.
 
 ### 4.4 @PreAuthorize 사용 기준
 
