@@ -9,8 +9,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import com.tracecare.backend.common.exception.auth.AccessDeniedCustomException;
 import com.tracecare.backend.common.exception.external.ExternalApiException;
@@ -57,6 +59,39 @@ public class GlobalExceptionHandler {
                 errors.stream().map(ErrorResponse.FieldErrorDetail::getField).toList());
         return ResponseEntity.status(ErrorCode.COMMON_002.getHttpStatus())
                 .body(ErrorResponse.of(ErrorCode.COMMON_002, errors));
+    }
+
+    /**
+     * 필수 쿼리 파라미터 누락/타입 불일치(잘못된 UUID·날짜 형식 등)는 클라이언트 입력 오류이므로 COMMON_002(400)로 응답한다. 이 핸들러가
+     * 없으면 {@code Exception} 핸들러로 떨어져 500(COMMON_001)이 나간다. 파라미터 이름만 남기고 입력 값 원문은 로그에 남기지 않는다.
+     */
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<ErrorResponse> handleMissingParameter(
+            MissingServletRequestParameterException e) {
+        log.warn("event=VALIDATION_FAILED, fields={}", List.of(e.getParameterName()));
+        return ResponseEntity.status(ErrorCode.COMMON_002.getHttpStatus())
+                .body(
+                        ErrorResponse.of(
+                                ErrorCode.COMMON_002,
+                                List.of(
+                                        ErrorResponse.FieldErrorDetail.builder()
+                                                .field(e.getParameterName())
+                                                .reason("필수 파라미터입니다")
+                                                .build())));
+    }
+
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ErrorResponse> handleTypeMismatch(MethodArgumentTypeMismatchException e) {
+        log.warn("event=VALIDATION_FAILED, fields={}", List.of(e.getName()));
+        return ResponseEntity.status(ErrorCode.COMMON_002.getHttpStatus())
+                .body(
+                        ErrorResponse.of(
+                                ErrorCode.COMMON_002,
+                                List.of(
+                                        ErrorResponse.FieldErrorDetail.builder()
+                                                .field(e.getName())
+                                                .reason("형식이 올바르지 않습니다")
+                                                .build())));
     }
 
     @ExceptionHandler(AccessDeniedCustomException.class)
