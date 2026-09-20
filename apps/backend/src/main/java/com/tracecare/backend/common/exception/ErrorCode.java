@@ -72,6 +72,10 @@ public enum ErrorCode {
     AI_003("AI_003", HttpStatus.NOT_FOUND, "AI 예측 결과가 없습니다"),
     AI_004("AI_004", HttpStatus.TOO_MANY_REQUESTS, "AI 서비스 호출 한도를 초과했습니다"),
 
+    // Anomaly
+    ANOMALY_001("ANOMALY_001", HttpStatus.NOT_FOUND, "이상행동 정보를 찾을 수 없습니다"),
+    ANOMALY_002("ANOMALY_002", HttpStatus.BAD_REQUEST, "지원하지 않는 질문입니다"),
+
     // Visit
     VISIT_001("VISIT_001", HttpStatus.NOT_FOUND, "조회 가능한 방문 이력이 없습니다"),
     VISIT_002("VISIT_002", HttpStatus.BAD_REQUEST, "조회 기간 값이 올바르지 않습니다"),

@@ -29,6 +29,9 @@ public enum SuccessCode {
     NOTI_001("NOTI_001", "알림 조회 성공"),
     NOTI_002("NOTI_002", "알림 읽음 처리 성공"),
     AI_001("AI_001", "AI 응답 생성 성공"),
+    ANOMALY_001("ANOMALY_001", "이상행동 목록 조회 성공"),
+    ANOMALY_002("ANOMALY_002", "이상행동 설명 조회 성공"),
+    ANOMALY_003("ANOMALY_003", "이상행동 질문 목록 조회 성공"),
     ARRIVAL_001("ARRIVAL_001", "도착 확인 성공"),
     EMERGENCY_001("EMERGENCY_001", "긴급 연락 발송 성공");
 

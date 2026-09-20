@@ -1,9 +1,12 @@
 package com.tracecare.backend.domain.anomaly.repository;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -44,6 +47,42 @@ public interface AnomalyEventRepository extends JpaRepository<AnomalyEvent, Long
                     + "AND ae.type = 'ARRIVAL_DELAY' AND ae.resolvedAt IS NULL")
     Optional<AnomalyEvent> findOpenArrivalDelay(
             @Param("userId") Long userId, @Param("placeId") Long placeId);
+
+    /**
+     * §3.9 목록 조회(유형 필터 없음) — {@code idx_ae_user_type_detected}의 {@code user_id} 접두사 + {@code detected_at}
+     * 범위를 타고 정렬은 별도 Sort로 수행한다(유형이 중간 컬럼이라 인덱스 순서를 그대로 못 쓰지만 CareTarget당 건수가 적어 감수).
+     */
+    Page<AnomalyEvent> findByUserIdAndDetectedAtBetweenOrderByDetectedAtDesc(
+            Long userId, Instant from, Instant to, Pageable pageable);
+
+    /** §3.9 목록 조회(유형 필터) — {@code idx_ae_user_type_detected}를 정렬까지 그대로 사용한다. */
+    Page<AnomalyEvent> findByUserIdAndTypeAndDetectedAtBetweenOrderByDetectedAtDesc(
+            Long userId, String type, Instant from, Instant to, Pageable pageable);
+
+    /** {@code DELAY_COUNT_7D}/{@code DELAY_COUNT_30D} — 같은 CareTarget·같은 장소의 유형별 발생 횟수. */
+    long countByUserIdAndTypeAndPlaceIdAndDetectedAtGreaterThanEqual(
+            Long userId, String type, Long placeId, Instant from);
+
+    /**
+     * {@code STAY_SIMILAR_PAST} — 자기 자신을 제외한 과거 {@code UNREGISTERED_STAY} 이벤트 중 좌표가 위경도 범위(Bounding
+     * Box) 안인 후보. PostGIS 없이 좌표 인덱스도 없으므로 {@code (user_id, type, detected_at)} 접두사로 범위를 좁힌 뒤 좌표를
+     * 필터링하고, 호출부가 Haversine({@code GeoDistanceCalculator})으로 실제 반경을 재계산한다(DATABASE_DESIGN_GUIDE.md §15.2/§15.7).
+     */
+    @Query(
+            "SELECT ae FROM AnomalyEvent ae "
+                    + "WHERE ae.userId = :userId AND ae.type = 'UNREGISTERED_STAY' "
+                    + "AND ae.id <> :excludeId AND ae.detectedAt >= :from "
+                    + "AND ae.latitude BETWEEN :minLat AND :maxLat "
+                    + "AND ae.longitude BETWEEN :minLng AND :maxLng "
+                    + "ORDER BY ae.detectedAt DESC")
+    List<AnomalyEvent> findSimilarUnregisteredStayCandidates(
+            @Param("userId") Long userId,
+            @Param("excludeId") Long excludeId,
+            @Param("from") Instant from,
+            @Param("minLat") BigDecimal minLat,
+            @Param("maxLat") BigDecimal maxLat,
+            @Param("minLng") BigDecimal minLng,
+            @Param("maxLng") BigDecimal maxLng);
 
     /** HYBRID 미승격 이상행동을 {@code /summary}에 포함시키기 위한 조회(§15.2). */
     List<AnomalyEvent> findByUserIdAndDetectedAtBetweenAndEscalatedAtIsNull(
