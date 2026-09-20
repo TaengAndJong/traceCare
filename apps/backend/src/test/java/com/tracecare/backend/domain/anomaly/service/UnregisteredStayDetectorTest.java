@@ -159,6 +159,9 @@ class UnregisteredStayDetectorTest {
         verify(anomalyEventRepository).save(captor.capture());
         assertThat(captor.getValue().getType()).isEqualTo(AnomalyEvent.TYPE_UNREGISTERED_STAY);
         assertThat(captor.getValue().getUserId()).isEqualTo(CARE_TARGET_ID);
+        // 스냅샷: stay_started_at은 후보의 startedAt(=체류 시작), scheduled_at은 이 유형에서 비워 둔다
+        assertThat(captor.getValue().getStayStartedAt()).isEqualTo(startedAt);
+        assertThat(captor.getValue().getScheduledAt()).isNull();
 
         verify(valueOperations).set(eq(activeKey()), eq("999"), eq(Duration.ofMinutes(5)));
     }
@@ -176,7 +179,8 @@ class UnregisteredStayDetectorTest {
                         null,
                         BigDecimal.valueOf(37.5),
                         BigDecimal.valueOf(127.0),
-                        Instant.parse("2026-09-15T00:00:00Z"));
+                        Instant.parse("2026-09-15T00:00:00Z"),
+                        Instant.parse("2026-09-14T23:50:00Z"));
         ReflectionTestUtils.setField(openEvent, "id", 444L);
         when(valueOperations.get(activeKey())).thenReturn("444");
         when(anomalyEventRepository.findById(444L)).thenReturn(Optional.of(openEvent));
@@ -238,7 +242,8 @@ class UnregisteredStayDetectorTest {
                         null,
                         BigDecimal.valueOf(37.5),
                         BigDecimal.valueOf(127.0),
-                        Instant.parse("2026-09-15T00:00:00Z"));
+                        Instant.parse("2026-09-15T00:00:00Z"),
+                        Instant.parse("2026-09-14T23:50:00Z"));
         ReflectionTestUtils.setField(openEvent, "id", 555L);
         when(valueOperations.get(activeKey())).thenReturn("555");
         when(anomalyEventRepository.findById(555L)).thenReturn(Optional.of(openEvent));
@@ -271,7 +276,8 @@ class UnregisteredStayDetectorTest {
                         null,
                         BigDecimal.valueOf(37.5),
                         BigDecimal.valueOf(127.0),
-                        Instant.parse("2026-09-15T00:00:00Z"));
+                        Instant.parse("2026-09-15T00:00:00Z"),
+                        Instant.parse("2026-09-14T23:50:00Z"));
         ReflectionTestUtils.setField(openEvent, "id", 777L);
         when(valueOperations.get(activeKey())).thenReturn("777");
         when(anomalyEventRepository.findById(777L)).thenReturn(Optional.of(openEvent));

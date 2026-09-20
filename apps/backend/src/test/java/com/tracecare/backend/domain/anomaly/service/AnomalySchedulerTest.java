@@ -14,6 +14,7 @@ import static org.mockito.Mockito.when;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
@@ -186,7 +187,8 @@ class AnomalySchedulerTest {
     @DisplayName("예상 도착 시각+감지기준을 넘겼고 도착 기록이 없으면 AnomalyEvent(ARRIVAL_DELAY)를 생성한다")
     void detectArrivalDelay_deadlinePassedAndNotArrived_createsAnomalyEvent() {
         // given — 예상 도착 시각이 30분 전(10분 감지기준을 이미 넘김)
-        ScheduledPlace scheduled = scheduledPlace(LocalTime.now(ZONE).minusMinutes(30));
+        LocalTime expectedTime = LocalTime.now(ZONE).minusMinutes(30);
+        ScheduledPlace scheduled = scheduledPlace(expectedTime);
         when(placeArrivalScheduleRepository.findScheduledByDayOfWeek(anyInt(), any()))
                 .thenReturn(new PageImpl<>(List.of(scheduled)));
         when(visitHistoryRepository.existsByUserIdAndPlaceIdAndArrivalTimeGreaterThanEqual(
@@ -207,6 +209,33 @@ class AnomalySchedulerTest {
     }
 
     @Test
+    @DisplayName("ARRIVAL_DELAY 생성 시 scheduled_at(예정 도착 시각)만 채우고 stay_started_at은 비워 둔다")
+    void detectArrivalDelay_created_fillsScheduledAtSnapshotOnly() {
+        // given
+        LocalTime expectedTime = LocalTime.now(ZONE).minusMinutes(30);
+        ScheduledPlace scheduled = scheduledPlace(expectedTime);
+        when(placeArrivalScheduleRepository.findScheduledByDayOfWeek(anyInt(), any()))
+                .thenReturn(new PageImpl<>(List.of(scheduled)));
+        when(visitHistoryRepository.existsByUserIdAndPlaceIdAndArrivalTimeGreaterThanEqual(
+                        eq(CARE_TARGET_ID), eq(PLACE_ID), any()))
+                .thenReturn(false);
+        when(anomalyEventRepository.findOpenArrivalDelay(CARE_TARGET_ID, PLACE_ID))
+                .thenReturn(Optional.empty());
+
+        // when
+        scheduler().tick();
+
+        // then — scheduled_at은 "오늘 예정 도착 시각"이고 detected_at은 그로부터 감지 기준(분) 뒤다
+        ArgumentCaptor<AnomalyEvent> captor = ArgumentCaptor.forClass(AnomalyEvent.class);
+        verify(anomalyEventRepository).save(captor.capture());
+        Instant expectedAt = LocalDate.now(ZONE).atTime(expectedTime).atZone(ZONE).toInstant();
+        assertThat(captor.getValue().getScheduledAt()).isEqualTo(expectedAt);
+        assertThat(captor.getValue().getDetectedAt())
+                .isEqualTo(expectedAt.plus(DETECT_MINUTES, ChronoUnit.MINUTES));
+        assertThat(captor.getValue().getStayStartedAt()).isNull();
+    }
+
+    @Test
     @DisplayName("이미 열린 ARRIVAL_DELAY 이벤트가 있으면 같은 스케줄에 대해 다시 생성하지 않는다")
     void detectArrivalDelay_alreadyOpenEvent_doesNotCreateDuplicate() {
         // given
@@ -218,7 +247,10 @@ class AnomalySchedulerTest {
                 .thenReturn(false);
         AnomalyEvent existing =
                 AnomalyEvent.createArrivalDelay(
-                        CARE_TARGET_ID, PLACE_ID, Instant.now().minus(20, ChronoUnit.MINUTES));
+                        CARE_TARGET_ID,
+                        PLACE_ID,
+                        Instant.now().minus(20, ChronoUnit.MINUTES),
+                        Instant.now().minus(30, ChronoUnit.MINUTES));
         when(anomalyEventRepository.findOpenArrivalDelay(CARE_TARGET_ID, PLACE_ID))
                 .thenReturn(Optional.of(existing));
 
@@ -241,7 +273,10 @@ class AnomalySchedulerTest {
                 .thenReturn(true);
         AnomalyEvent existing =
                 AnomalyEvent.createArrivalDelay(
-                        CARE_TARGET_ID, PLACE_ID, Instant.now().minus(20, ChronoUnit.MINUTES));
+                        CARE_TARGET_ID,
+                        PLACE_ID,
+                        Instant.now().minus(20, ChronoUnit.MINUTES),
+                        Instant.now().minus(30, ChronoUnit.MINUTES));
         when(anomalyEventRepository.findOpenArrivalDelay(CARE_TARGET_ID, PLACE_ID))
                 .thenReturn(Optional.of(existing));
 
@@ -291,7 +326,8 @@ class AnomalySchedulerTest {
     // ---------------------------------------------------------------------
 
     private AnomalyEvent openArrivalDelayEvent(Instant detectedAt) {
-        AnomalyEvent event = AnomalyEvent.createArrivalDelay(CARE_TARGET_ID, PLACE_ID, detectedAt);
+        AnomalyEvent event = AnomalyEvent.createArrivalDelay(
+                        CARE_TARGET_ID, PLACE_ID, detectedAt, detectedAt.minus(10, ChronoUnit.MINUTES));
         ReflectionTestUtils.setField(event, "id", 500L);
         return event;
     }

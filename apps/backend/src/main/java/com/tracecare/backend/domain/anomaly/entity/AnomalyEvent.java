@@ -57,6 +57,21 @@ public class AnomalyEvent {
     @Column(name = "resolved_at")
     private Instant resolvedAt;
 
+    /**
+     * {@code ARRIVAL_DELAY} 전용 스냅샷 — 이벤트 생성 시점의 예정 도착 시각(그날의 {@code
+     * PlaceArrivalSchedule.expected_arrival_time}을 절대 시각으로 변환한 값). {@code /explain} 질문이 역산 없이 쓴다
+     * (DATABASE_DESIGN_GUIDE.md §15.7 E). 다른 유형이거나 이 컬럼 추가 이전에 생성된 이벤트는 {@code null}.
+     */
+    @Column(name = "scheduled_at", updatable = false)
+    private Instant scheduledAt;
+
+    /**
+     * {@code UNREGISTERED_STAY} 전용 스냅샷 — 후보({@code anomaly:candidate})의 {@code startedAt}, 즉 등록 안 된 곳에서
+     * 머물기 시작한 시각. 다른 유형이거나 이 컬럼 추가 이전에 생성된 이벤트는 {@code null}.
+     */
+    @Column(name = "stay_started_at", updatable = false)
+    private Instant stayStartedAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -66,33 +81,51 @@ public class AnomalyEvent {
             Long placeId,
             BigDecimal latitude,
             BigDecimal longitude,
-            Instant detectedAt) {
+            Instant detectedAt,
+            Instant scheduledAt,
+            Instant stayStartedAt) {
         this.userId = userId;
         this.type = type;
         this.placeId = placeId;
         this.latitude = latitude;
         this.longitude = longitude;
         this.detectedAt = detectedAt;
+        this.scheduledAt = scheduledAt;
+        this.stayStartedAt = stayStartedAt;
         this.createdAt = Instant.now();
     }
 
-    /** {@code AnomalyScheduler}가 오늘 요일 스케줄 중 미도착 Place를 찾아 감지한 시점에 생성한다. */
-    public static AnomalyEvent createArrivalDelay(Long userId, Long placeId, Instant detectedAt) {
-        return new AnomalyEvent(userId, TYPE_ARRIVAL_DELAY, placeId, null, null, detectedAt);
+    /**
+     * {@code AnomalyScheduler}가 오늘 요일 스케줄 중 미도착 Place를 찾아 감지한 시점에 생성한다. {@code scheduledAt}은 그날의
+     * 예정 도착 시각 스냅샷이다.
+     */
+    public static AnomalyEvent createArrivalDelay(
+            Long userId, Long placeId, Instant detectedAt, Instant scheduledAt) {
+        return new AnomalyEvent(
+                userId, TYPE_ARRIVAL_DELAY, placeId, null, null, detectedAt, scheduledAt, null);
     }
 
     /**
      * {@code UnregisteredStayDetector}가 등록 안 된 곳에서 감지 기준(분) 이상 머문 것을 확인한 시점에 생성한다. {@code
-     * nearestPlaceId}는 가장 가까운 등록 장소(있으면) 참고용이며, 실제 위치는 {@code latitude}/{@code longitude}다.
+     * nearestPlaceId}는 가장 가까운 등록 장소(있으면) 참고용이며, 실제 위치는 {@code latitude}/{@code longitude}다. {@code
+     * stayStartedAt}은 체류 시작 시각 스냅샷(후보의 {@code startedAt})이다.
      */
     public static AnomalyEvent createUnregisteredStay(
             Long userId,
             Long nearestPlaceId,
             BigDecimal latitude,
             BigDecimal longitude,
-            Instant detectedAt) {
+            Instant detectedAt,
+            Instant stayStartedAt) {
         return new AnomalyEvent(
-                userId, TYPE_UNREGISTERED_STAY, nearestPlaceId, latitude, longitude, detectedAt);
+                userId,
+                TYPE_UNREGISTERED_STAY,
+                nearestPlaceId,
+                latitude,
+                longitude,
+                detectedAt,
+                null,
+                stayStartedAt);
     }
 
     public boolean isOpen() {

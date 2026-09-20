@@ -158,7 +158,7 @@ public class AnomalyScheduler {
 
         AnomalyEvent event =
                 AnomalyEvent.createArrivalDelay(
-                        scheduled.getTargetId(), scheduled.getPlaceId(), deadline);
+                        scheduled.getTargetId(), scheduled.getPlaceId(), deadline, expectedAt);
         anomalyEventRepository.save(event);
         log.info(
                 "event=ANOMALY_ARRIVAL_DELAY_DETECTED, careTargetId={}, placeId={}, anomalyEventId={}",

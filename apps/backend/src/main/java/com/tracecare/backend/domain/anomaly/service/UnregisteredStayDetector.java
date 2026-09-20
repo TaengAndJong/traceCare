@@ -185,7 +185,8 @@ public class UnregisteredStayDetector {
                         nearestPlaceId,
                         BigDecimal.valueOf(current.lat()),
                         BigDecimal.valueOf(current.lng()),
-                        detectedAt);
+                        detectedAt,
+                        current.startedAt());
         anomalyEventRepository.save(event);
         writeActiveCache(careTargetId, event.getId());
         evictCandidate(careTargetId);
