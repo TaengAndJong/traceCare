@@ -3,8 +3,6 @@ package com.tracecare.backend.domain.place;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Statement;
@@ -29,6 +27,7 @@ import com.tracecare.backend.domain.guardian.service.GuardianTargetService;
 import com.tracecare.backend.domain.place.dto.request.PlaceCreateRequest;
 import com.tracecare.backend.domain.place.dto.response.PlaceResponse;
 import com.tracecare.backend.domain.place.service.PlaceService;
+import com.tracecare.backend.support.TestSchema;
 
 /**
  * Place 중복 등록 판정(PLACE_002)의 거리 경계값을 검증한다. 판정 반경은 {@code place.duplicate-distance-meters}
@@ -60,9 +59,7 @@ class PlaceDuplicateBoundaryIntegrationTest {
 
     @BeforeAll
     static void initSchema() throws Exception {
-        String ddl =
-                Files.readString(
-                        Paths.get("../../docs/db/tracecare_schema_ddl_2026-09-16_1.2.sql"));
+        String ddl = TestSchema.readLatestDdl();
         try (Connection connection =
                         DriverManager.getConnection(
                                 postgres.getJdbcUrl(),

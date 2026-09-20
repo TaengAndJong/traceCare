@@ -2,8 +2,6 @@ package com.tracecare.backend.domain.guardian;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Statement;
@@ -37,6 +35,7 @@ import com.tracecare.backend.domain.auth.repository.UserRepository;
 import com.tracecare.backend.domain.guardian.entity.GuardianTarget;
 import com.tracecare.backend.domain.guardian.repository.GuardianTargetRepository;
 import com.tracecare.backend.domain.guardian.service.GuardianTargetService;
+import com.tracecare.backend.support.TestSchema;
 
 /**
  * DATABASE_DESIGN_GUIDE.md §7 "GuardianTarget 신규 등록" 락(SELECT...FOR UPDATE)이 실제 동시 요청 상황에서도 정원(3명)을
@@ -61,9 +60,7 @@ class GuardianTargetConcurrencyIntegrationTest {
 
     @BeforeAll
     static void initSchema() throws Exception {
-        String ddl =
-                Files.readString(
-                        Paths.get("../../docs/db/tracecare_schema_ddl_2026-09-16_1.2.sql"));
+        String ddl = TestSchema.readLatestDdl();
         try (Connection connection =
                         DriverManager.getConnection(
                                 postgres.getJdbcUrl(),

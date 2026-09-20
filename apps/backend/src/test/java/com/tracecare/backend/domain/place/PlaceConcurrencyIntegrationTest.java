@@ -2,8 +2,6 @@ package com.tracecare.backend.domain.place;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Statement;
@@ -36,6 +34,7 @@ import com.tracecare.backend.domain.place.dto.request.PlaceUpdateRequest;
 import com.tracecare.backend.domain.place.entity.Place;
 import com.tracecare.backend.domain.place.repository.PlaceRepository;
 import com.tracecare.backend.domain.place.service.PlaceService;
+import com.tracecare.backend.support.TestSchema;
 
 /**
  * Place.version(낙관적 락)이 실제 동시 수정 상황에서 정확히 동작하는지 검증한다 — 같은 Place를 두 스레드가 동시에 PUT하면 하나만 성공하고, 늦게
@@ -56,9 +55,7 @@ class PlaceConcurrencyIntegrationTest {
 
     @BeforeAll
     static void initSchema() throws Exception {
-        String ddl =
-                Files.readString(
-                        Paths.get("../../docs/db/tracecare_schema_ddl_2026-09-16_1.2.sql"));
+        String ddl = TestSchema.readLatestDdl();
         try (Connection connection =
                         DriverManager.getConnection(
                                 postgres.getJdbcUrl(),

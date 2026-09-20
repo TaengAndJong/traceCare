@@ -6,8 +6,6 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Statement;
@@ -37,6 +35,7 @@ import com.tracecare.backend.common.cache.CacheKeyGenerator;
 import com.tracecare.backend.domain.auth.entity.User;
 import com.tracecare.backend.domain.auth.repository.UserRepository;
 import com.tracecare.backend.domain.auth.service.TokenService;
+import com.tracecare.backend.support.TestSchema;
 
 /**
  * Refresh Token Rotation(Security_Guide.md §5.5)의 "정상 재발급 성공"/"재사용 감지 시 전체 세션 강제 만료" 두 시나리오를 실제
@@ -75,9 +74,7 @@ class TokenRefreshIntegrationTest {
      */
     @BeforeAll
     static void initSchema() throws Exception {
-        String ddl =
-                Files.readString(
-                        Paths.get("../../docs/db/tracecare_schema_ddl_2026-09-16_1.2.sql"));
+        String ddl = TestSchema.readLatestDdl();
         try (Connection connection =
                         DriverManager.getConnection(
                                 postgres.getJdbcUrl(),

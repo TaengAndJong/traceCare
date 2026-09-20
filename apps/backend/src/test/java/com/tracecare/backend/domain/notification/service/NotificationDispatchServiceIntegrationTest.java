@@ -3,8 +3,6 @@ package com.tracecare.backend.domain.notification.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Statement;
@@ -32,6 +30,7 @@ import com.tracecare.backend.domain.notification.entity.NotificationHistory;
 import com.tracecare.backend.domain.notification.fcm.FcmSender;
 import com.tracecare.backend.domain.notification.repository.NotificationHistoryRepository;
 import com.tracecare.backend.domain.place.repository.PlaceRepository;
+import com.tracecare.backend.support.TestSchema;
 
 /**
  * dispatchArrival() 트랜잭션 버그 수정의 핵심 확인 지점 — Mockito 단위 테스트({@code
@@ -57,9 +56,7 @@ class NotificationDispatchServiceIntegrationTest {
 
     @BeforeAll
     static void initSchema() throws Exception {
-        String ddl =
-                Files.readString(
-                        Paths.get("../../docs/db/tracecare_schema_ddl_2026-09-16_1.2.sql"));
+        String ddl = TestSchema.readLatestDdl();
         try (Connection connection =
                         DriverManager.getConnection(
                                 postgres.getJdbcUrl(),
