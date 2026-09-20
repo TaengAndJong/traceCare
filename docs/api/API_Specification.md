@@ -223,8 +223,9 @@ VisitHistory 기준(가공된 "방문 단위" 데이터). 원본 GPS 좌표 나�
 | POST | `/api/guardian/ai/chat` | 자연어 질의응답 |
 | POST | `/api/guardian/ai/summary` | 이동 요약 |
 | POST | `/api/guardian/ai/report/weekly` | 주간 리포트 |
-| POST | `/api/guardian/ai/explain` | 이상행동 설명 |
 | POST | `/api/guardian/ai/search` | 자연어 이동기록 검색 |
+
+> 기획서 원문에 있던 `POST /api/guardian/ai/explain`(이상행동 설명)은 이 절에서 **제거**했다 — LLM을 호출하지 않는 고정 질문 템플릿 방식으로 확정되면서 `GET /api/guardian/anomalies/{anomalyEventId}/explain`(§3.9)으로 대체됐다(§7.3).
 
 | 구분 | 필드 | 타입 | 설명 |
 |---|---|---|---|
@@ -282,6 +283,107 @@ VisitHistory 기준(가공된 "방문 단위" 데이터). 원본 GPS 좌표 나�
 | PUT | `/api/guardian/profile/image` | 프로필 이미지 변경 |
 
 성공 코드: `USER_001`(조회) / `USER_002`(수정)
+
+### 3.9 이상행동 (ANOMALY)
+
+이상행동(`ARRIVAL_DELAY`/`UNREGISTERED_STAY`) 감지 결과(`AnomalyEvent`, DATABASE_DESIGN_GUIDE.md §15)를 Guardian이 조회하는 API다. **LLM을 호출하지 않는다** — 감지 자체는 스케줄러/위치 수신 흐름이 수행하고(§15.1/§15.2), 이 절의 API는 저장된 데이터만 읽는다. 에러 코드 도메인은 LLM 계열(`AI_*`)이 아니라 `ANOMALY_*`를 쓴다(API_Response_Rule.md §5.1).
+
+| Method | URI | 권한 | 설명 |
+|---|---|---|---|
+| GET | `/api/guardian/anomalies` | Guardian | 이상행동 목록 조회 |
+| GET | `/api/guardian/anomalies/questions` | Guardian | 이상행동 유형별 질문 카탈로그 조회 |
+| GET | `/api/guardian/anomalies/{anomalyEventId}/explain?question={questionKey}` | Guardian | 이상행동 설명 — 선택한 질문에 대한 저장 데이터 기반 답변 |
+
+권한은 공통으로 1) 인증, 2) `SecurityConfig`의 `/api/guardian/**` → Guardian Role(불일치 시 `GUARDIAN_001`), 3) 리소스가 있는 API는 Service 계층의 소유권 검증(호출자가 해당 CareTarget의 ACTIVE Guardian인지)의 3단계를 따른다(Security_Guide.md §4.5).
+
+#### `GET /api/guardian/anomalies` — 목록 조회
+
+| 구분 | 필드 | 타입 | 필수 | 설명 |
+|---|---|---|---|---|
+| Query | `careTargetId` | string(UUID) | **필수** | 조회 대상 CareTarget의 `public_id`. `/places`, `/history/*`와 동일하게 CareTarget을 먼저 선택한 뒤 조회하는 흐름이다 |
+| Query | `type` | string | 선택 | `ARRIVAL_DELAY` / `UNREGISTERED_STAY`. 생략하면 전체 유형. 허용되지 않은 값은 `COMMON_002`(400) |
+| Query | `from` | string(ISO-8601 Instant) | 선택 | 조회 기간 시작(포함) — `detected_at` 기준. 생략 시 `to`−7일 |
+| Query | `to` | string(ISO-8601 Instant) | 선택 | 조회 기간 끝. 생략 시 현재 시각 |
+| Query | `page`/`size` | number | 선택 | 표준 `Pageable`. 응답은 `PageResponse` 구조(API_Response_Rule.md §2.2) |
+
+- **기간 규칙**: `from`/`to`를 모두 생략하면 "최근 7일"이다. 둘 중 하나만 주면 나머지는 위 기본값으로 채운다. `from`이 `to`보다 이후이거나 `to`−`from`이 **90일을 초과하면 `COMMON_002`(400)** 이다(`/summary`의 `from > to` 처리와 동일한 코드).
+- 정렬은 서버에서 `detected_at DESC`로 고정한다(클라이언트 정렬 파라미터 없음). `idx_ae_user_type_detected(user_id, type, detected_at DESC)`를 사용한다(DATABASE_DESIGN_GUIDE.md §9).
+- **결과가 0건이면 404가 아니라 빈 목록(200)** 을 반환한다 — "이상 없음"은 오류가 아니라 정상 결과이고, `/places`·`/notifications`와 같은 "현재 상태 나열형" 조회이기 때문이다(방문 히스토리 `VISIT_001`(404)과는 성격이 다르다).
+- `careTargetId`에 해당하는 CareTarget이 없으면 `TARGET_001`(404), 호출자가 그 CareTarget의 ACTIVE Guardian이 아니면 빈 목록이 아니라 `TARGET_002`(403)이다.
+
+응답 `content` 항목:
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `anomalyEventId` | number | `AnomalyEvent` 내부 PK(시계열 이력 데이터라 `public_id` 정책 미적용, API_Response_Rule.md §1.5). 노출된 값이므로 `/explain`에서 소유권 검증이 필수다 |
+| `type` | string | `ARRIVAL_DELAY` / `UNREGISTERED_STAY` |
+| `status` | string | `ONGOING`(`resolved_at`이 null) / `RESOLVED`. 서버가 계산해 내려준다 |
+| `detectedAt` | string(ISO-8601 Instant) | 감지 시각 |
+| `resolvedAt` | string, nullable | 해제 시각. 진행 중이면 null |
+| `placeId` | string(UUID), nullable | 관련 Place의 `public_id`(Master Data라 내부 PK를 노출하지 않는다). `ARRIVAL_DELAY`는 지연된 예정 장소, `UNREGISTERED_STAY`는 감지 시점에 가장 가까웠던 등록 장소(있으면) |
+| `placeName` | string, nullable | 조회 시 페이지의 Place를 `IN` 쿼리로 일괄 조회해 채운다(스냅샷 컬럼 아님, N+1 없음). **Soft Delete된 Place는 null** |
+| `latitude`/`longitude` | number, nullable | `UNREGISTERED_STAY`에서만 값이 있다 |
+
+`escalatedAt`은 응답에 포함하지 않는다 — `AnomalyEvent.escalated_at`은 "최초 승격 시각(참고용)"이라 이 Guardian이 실제로 푸시를 받았는지를 뜻하지 않기 때문이다(DATABASE_DESIGN_GUIDE.md §15.2, §15.6).
+
+성공 코드: `ANOMALY_001` · 주요 실패 코드: `TARGET_001`(404, CareTarget 없음), `TARGET_002`(403, 관계 미매핑), `COMMON_002`(400, `careTargetId` 누락, `type` 값 오류, 기간 값 오류)
+
+#### `GET /api/guardian/anomalies/questions` — 질문 카탈로그 조회
+
+이상행동 유형별로 고정된 질문 템플릿의 **키와 표시 문구**를 서버가 내려준다(질문 카탈로그는 Frontend가 하드코딩하지 않는다). Frontend는 이상행동 목록에서 항목을 선택했을 때 그 항목의 `type`에 해당하는 카탈로그를 보여주고, 사용자가 고른 `questionKey`를 `/explain`에 전달한다. 카탈로그는 고정 목록이라 앱 실행 중 캐시해도 된다.
+
+- **목록 API 응답에 질문을 섞지 않고 별도 엔드포인트로 분리했다** — 목록 응답 필드는 위 표로 확정돼 있고, 항목마다 같은 질문 목록을 반복해 내려주면 페이지당 응답 크기만 늘어난다.
+- 질문 목록은 DB가 아니라 Backend 코드 상수(enum)로 관리한다(DATABASE_DESIGN_GUIDE.md §15.7).
+
+| 구분 | 필드 | 타입 | 필수 | 설명 |
+|---|---|---|---|---|
+| Query | `type` | string | **필수** | `ARRIVAL_DELAY` / `UNREGISTERED_STAY`. 누락되거나 허용되지 않은 값이면 `COMMON_002`(400) |
+| Response `content` 항목 | `questionKey` | string | - | `/explain`의 `question` 파라미터에 넘기는 값 |
+| Response `content` 항목 | `text` | string | - | 사용자에게 보여줄 질문 문구 |
+
+응답은 고정 목록이라 페이징하지 않지만 다른 목록 API와 같은 `PageResponse` 구조로 감싸 내려준다(`/places`와 동일한 관행). 항목 순서는 아래 표의 순서다. 리소스(CareTarget/이벤트)를 다루지 않으므로 소유권 검증은 없다.
+
+성공 코드: `ANOMALY_003` · 주요 실패 코드: `COMMON_002`(400)
+
+**질문 카탈로그** (`ARRIVAL_DELAY` 7개, `UNREGISTERED_STAY` 8개 — 답변에 쓰는 데이터 출처는 DATABASE_DESIGN_GUIDE.md §15.7)
+
+| 유형 | `questionKey` | `text` |
+|---|---|---|
+| `ARRIVAL_DELAY` | `DELAY_REASON` | 왜 감지됐나요? |
+| `ARRIVAL_DELAY` | `DELAY_EXPECTED_TIME` | 원래 도착 예정 시각은 언제였나요? |
+| `ARRIVAL_DELAY` | `DELAY_DURATION` | 현재까지 얼마나 지연됐나요? |
+| `ARRIVAL_DELAY` | `DELAY_CURRENT_LOCATION` | 지금 어디에 있나요? |
+| `ARRIVAL_DELAY` | `DELAY_LAST_VISIT` | 이 장소를 마지막으로 방문한 때는 언제인가요? |
+| `ARRIVAL_DELAY` | `DELAY_COUNT_7D` | 최근 7일간 몇 번 지연됐나요? |
+| `ARRIVAL_DELAY` | `DELAY_COUNT_30D` | 최근 30일간 몇 번 지연됐나요? |
+| `UNREGISTERED_STAY` | `STAY_REASON` | 왜 감지됐나요? |
+| `UNREGISTERED_STAY` | `STAY_LOCATION` | 정확한 위치는 어디인가요? |
+| `UNREGISTERED_STAY` | `STAY_STARTED_AT` | 언제부터 머물렀나요? |
+| `UNREGISTERED_STAY` | `STAY_ELAPSED` | 얼마나 머물렀나요? |
+| `UNREGISTERED_STAY` | `STAY_ONGOING` | 지금도 머물고 있나요? |
+| `UNREGISTERED_STAY` | `STAY_NEAREST_PLACE_DISTANCE` | 가장 가까운 등록 장소까지 얼마나 떨어져 있나요? |
+| `UNREGISTERED_STAY` | `STAY_COUNT_7D` | 최근 7일간 몇 번 발생했나요? |
+| `UNREGISTERED_STAY` | `STAY_SIMILAR_PAST` | 과거 비슷한 위치에서 10분 이상 머문 이력이 있나요? |
+
+#### `GET /api/guardian/anomalies/{anomalyEventId}/explain?question={questionKey}` — 이상행동 설명
+
+- **LLM을 호출하지 않는다.** 서버가 선택된 질문에 대응하는 저장 데이터를 조회해 문장을 조립해서 응답한다. 기존 `POST /api/guardian/ai/explain`은 폐기됐다(§7.3).
+- `{anomalyEventId}` = `AnomalyEvent` 내부 PK.
+
+| 구분 | 필드 | 타입 | 필수 | 설명 |
+|---|---|---|---|---|
+| Path | `anomalyEventId` | number | **필수** | 설명을 볼 이상행동 이벤트의 내부 PK |
+| Query | `question` | string | **필수** | 위 카탈로그의 `questionKey`. 누락 시 `COMMON_002`(400) |
+| Response | `answer` | string | - | 선택한 질문에 대한 답변 문장. **질문 종류와 무관하게 항상 문자열 하나**(`/summary`, `/report/weekly`와 동일 구조) |
+
+**검증 순서**: ① `question` 누락 → `COMMON_002`(400) → ② 이벤트 없음 → `ANOMALY_001`(404) → ③ 호출자가 이 이벤트가 속한 CareTarget의 ACTIVE Guardian이 아님 → `TARGET_002`(403, `AccessDeniedCustomException`) → ④ `questionKey`가 카탈로그에 없거나 **이 이벤트의 `type`에 속하지 않는 키**(예: `ARRIVAL_DELAY` 이벤트에 `STAY_*` 키) → `ANOMALY_002`(400). 키 검증이 이벤트의 유형에 종속되므로 소유권 검증 뒤에 수행한다(소유자가 아닌 호출자는 키가 무엇이든 403을 받는다).
+
+**답변 조립 시 유의사항**
+- 시각은 서버 기본 타임존 기준 문장("M월 d일 HH:mm")으로 표기한다(프로젝트의 기존 관행, `AiChatService`와 동일).
+- 이 이벤트에 필요한 값이 없으면(예: Soft Delete된 Place, 스냅샷 컬럼이 추가되기 이전에 생성돼 `scheduled_at`/`stay_started_at`이 null인 이벤트) 에러가 아니라 "확인할 수 없어요"류의 안내 문장으로 답한다.
+- 좌표를 포함하는 답변(`DELAY_CURRENT_LOCATION`, `STAY_LOCATION`)이 있으나 **Audit Log는 이번 범위에 포함하지 않는다**(위치 노출 API 전체 공통 도입 로드맵 항목, Logging_Guide.md §12.1).
+
+성공 코드: `ANOMALY_002` · 주요 실패 코드: `ANOMALY_001`(404, 이벤트 없음), `ANOMALY_002`(400, 잘못된 질문 키), `TARGET_002`(403, 소유권 불일치), `COMMON_002`(400, `question` 누락)
 
 ---
 
@@ -471,3 +573,22 @@ CONNECT 단계에서 인증, SUBSCRIBE 단계에서 리소스 소유권을 검�
 - DB의 `role IN ('ADMIN', ...)` 값 자체는 유지한다(향후 확장 여지를 막지 않기 위함이며, 지금 당장 이 값을 쓰는 API는 없다)
 - 향후 필요해지면 이어서 설계할 후보만 남겨둔다: 회원 정지/탈퇴 처리, 신고·이상행동 리뷰, 시스템 상태 모니터링
 - 향후 확장 시에는 이 문서에 `## 8. 관리자(Admin) API` 절을 신설해서 추가하고, 이 절(7.2)은 "제외 결정의 근거"로 남겨둔다
+
+### 7.3 `/explain` — LLM 미사용 고정 질문 템플릿으로 전환, URI 변경 (확정, 2026-09-20)
+
+기획서 원문의 `POST /api/guardian/ai/explain`(이상행동 설명)은 "AI 케어 비서(LLM 연동)" 그룹(§3.6)에 속해 LLM이 이상행동을 자연어로 설명하는 것을 전제로 했으나, 아래처럼 변경을 확정했다.
+
+| 기존 | 변경 |
+|---|---|
+| `POST /api/guardian/ai/explain` — LLM(Gemini) 호출 전제 | **폐기** |
+| — | `GET /api/guardian/anomalies/{anomalyEventId}/explain?question={questionKey}`(§3.9) — LLM을 호출하지 않고, 서버가 카탈로그로 제공하는 고정 질문 템플릿(`ARRIVAL_DELAY` 7개, `UNREGISTERED_STAY` 8개) 중 사용자가 선택한 질문에 대응하는 저장 데이터로 답변 문장을 조립해 `answer` 하나로 반환 |
+
+- `/explain`은 LLM을 호출하지 않으므로 LLM 계열 코드(`AI_001` 성공, `AI_002`/`AI_004` 실패)를 사용하지 않고 `ANOMALY_*` 도메인을 쓴다. `AI_002`/`AI_004`는 삭제되지 않는다 — `/chat`, `/summary`, `/search`, `/report/weekly`(§3.6)가 그대로 사용한다.
+- `/explain` 자체는 구현된 적이 없어(Backend Controller/Service 없음) 폐기로 인한 코드 변경은 없다.
+- **함께 확정된 세부 사항**(상세는 §3.9, DATABASE_DESIGN_GUIDE.md §15.7):
+  - 질문은 `question={questionKey}` 쿼리 파라미터로 지정하고, 질문 카탈로그(키+표시 문구)는 서버가 `GET /api/guardian/anomalies/questions?type=`으로 제공한다(Frontend 하드코딩 아님).
+  - 응답은 질문 종류와 무관하게 `answer: string` 하나로 통일한다.
+  - 성공 코드는 `ANOMALY_001`(목록)/`ANOMALY_002`(설명)/`ANOMALY_003`(카탈로그), 에러 코드는 `ANOMALY_001`(이벤트 없음, 404)/`ANOMALY_002`(잘못된 질문 키, 400)로 성공/에러가 독립된 번호 공간을 쓰며(API_Response_Rule.md §5.1), 파라미터 누락은 `COMMON_002`, 소유권 불일치는 `TARGET_002`를 재사용한다.
+  - 예정 시각/체류 시작 시각은 역산하지 않고 `AnomalyEvent` 스냅샷 컬럼(`scheduled_at`, `stay_started_at`)으로 저장한다.
+  - "과거 비슷한 위치" 질문의 조회 원본은 과거 `UNREGISTERED_STAY` 이벤트뿐이다.
+  - Audit Log는 이번 범위에 포함하지 않는다(위치 노출 API 전체 공통 도입 로드맵).

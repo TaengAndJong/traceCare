@@ -145,7 +145,10 @@
 | PLACE_003 | 장소(안심구역) 삭제 성공 |
 | NOTI_001 | 알림 조회 성공 |
 | NOTI_002 | 알림 읽음 처리 성공 |
-| AI_001 | AI 응답 생성 성공 |
+| AI_001 | AI 응답 생성 성공 — LLM/AI 서버 응답에만 사용한다. **`/explain`(이상행동 설명)은 LLM을 호출하지 않는 고정 질문 템플릿 방식으로 확정되어(2026-09-20) 더 이상 이 코드를 쓰지 않는다**(`ANOMALY_*` 사용, API_Specification.md §7.3) |
+| ANOMALY_001 | 이상행동 목록 조회 성공(`GET /api/guardian/anomalies`, API_Specification.md §3.9) — 5.1절과 동일하게 `ErrorCode.ANOMALY_001`(404)과는 별도 번호 공간 |
+| ANOMALY_002 | 이상행동 설명 조회 성공(`GET /api/guardian/anomalies/{anomalyEventId}/explain`) — 고정 질문 템플릿에 대한 답변(`answer`)을 반환 |
+| ANOMALY_003 | 이상행동 질문 카탈로그 조회 성공(`GET /api/guardian/anomalies/questions`) |
 | VISIT_001 | 방문 히스토리 조회 성공(§8.7) — 5.1절과 동일하게 `ErrorCode.VISIT_001`(404)과는 별도 번호 공간 |
 | ARRIVAL_001 | 도착 확인 성공(§8.8) — `ErrorCode.ARRIVAL_001`(403, Guardian 호출)과는 별도 번호 공간 |
 | EMERGENCY_001 | 긴급 연락(전화/문자/위치) 발송 성공(§8.9) — `ErrorCode.EMERGENCY_001`(403, Guardian 호출)과는 별도 번호 공간. call/message/location 세 엔드포인트가 의미상 동일한 액션(보호자에게 긴급 상황을 알림)이라 코드를 통일했다 |
@@ -237,7 +240,7 @@ REST 관례상 HTTP Status와 Response Body의 `success`는 항상 일치해야 
 {도메인}_{3자리 일련번호}
 ```
 
-- 도메인은 대문자 스네이크/단일 단어 (`AUTH`, `USER`, `GUARDIAN`, `TARGET`, `LOCATION`, `PLACE`, `NOTI`, `AI`, `COMMON`)
+- 도메인은 대문자 스네이크/단일 단어 (`AUTH`, `USER`, `GUARDIAN`, `TARGET`, `LOCATION`, `PLACE`, `NOTI`, `AI`, `ANOMALY`, `COMMON`)
 - 일련번호는 001부터 3자리로 증가, 도메인별로 별도 관리(도메인이 다르면 001이 여러 번 존재할 수 있음)
 - 신규 에러 코드 추가 시 반드시 이 문서(5절)와 Backend의 `ErrorCode` Enum(6.4절)에 **동시에** 추가한다. 둘 중 하나만 갱신되는 것을 방지하기 위해 PR 리뷰 체크리스트에 포함한다.
 
@@ -364,6 +367,18 @@ REST 관례상 HTTP Status와 Response Body의 `success`는 항상 일치해야 
 | EMERGENCY_003 | 500 | 전화 연동(통신사 API 등) 또는 SMS 발송 자체가 실패 |
 
 > EMERGENCY_003은 COMMON_001과 달리 일반화된 메시지로 덮지 않고, Frontend가 "다른 연락 수단(예: 위치 전송만이라도 재시도)"으로 즉시 폴백할 수 있도록 `code`를 그대로 노출한다(7.6절 사용자 메시지 표시 기준에 반영).
+
+#### 이상행동 (ANOMALY)
+
+`GET /api/guardian/anomalies`, `GET /api/guardian/anomalies/questions`, `GET /api/guardian/anomalies/{anomalyEventId}/explain` 전용 도메인. LLM을 호출하지 않는 조회 API라 LLM 계열(`AI_*`)이 아니라 이 도메인을 쓴다(API_Specification.md §3.9, §7.3).
+
+| code | HTTP Status | 상황 |
+|---|---|---|
+| ANOMALY_001 | 404 | `/explain` 대상 이상행동 이벤트(`anomalyEventId`)가 존재하지 않음 |
+| ANOMALY_002 | 400 | `/explain`의 `question` 값이 질문 카탈로그에 없거나, 해당 이벤트의 유형에 속하지 않는 질문 키 |
+
+> **번호 체계**: 다른 도메인(`VISIT`, `ARRIVAL`, `EMERGENCY` 등)과 동일하게 성공 코드와 에러 코드가 **독립된 번호 공간**(5.1절)을 쓴다. 성공 코드는 `ANOMALY_001`(목록)/`002`(설명)/`003`(카탈로그), 에러 코드는 `ANOMALY_001`(이벤트 없음)/`002`(잘못된 질문 키)이며, 같은 문자열이라도 `SuccessCode.ANOMALY_001`과 `ErrorCode.ANOMALY_001`은 서로 다른 Enum에서 별도로 관리한다.
+> **재사용하는 공통 코드**: `question` 파라미터 누락, `careTargetId`/`type` 값 오류, 조회 기간 값 오류는 `COMMON_002`(400), 소유권 불일치(호출자가 해당 CareTarget의 ACTIVE Guardian이 아님)는 `TARGET_002`(403), `careTargetId`에 해당하는 CareTarget이 없으면 `TARGET_001`(404)을 그대로 쓴다.
 
 ---
 

@@ -117,6 +117,8 @@ com.tracecare.backend
          │   ├─ CareTargetNotFoundException.java
          │   ├─ PlaceNotFoundException.java
          │   ├─ VisitHistoryNotFoundException.java
+         │   ├─ AnomalyEventNotFoundException.java   # 이상행동 이벤트 없음 (ANOMALY_001)
+         │   ├─ InvalidAnomalyQuestionException.java # /explain 잘못된 질문 키 (ANOMALY_002)
          │   ├─ ArrivalNotRegisteredException.java   # GeoFence 반경 밖 도착 확인 (ARRIVAL_002)
          │   ├─ EmergencyContactMissingException.java # 등록된 보호자 연락처 없음 (EMERGENCY_002)
          │   └─ DuplicateResourceException.java
@@ -189,13 +191,14 @@ RuntimeException
      ├─ ErrorCode errorCode        // API Response Rule의 Error Code Enum 참조 (예: TARGET_001, PLACE_002)
      ├─ HttpStatus httpStatus
      │
-     ├─ InvalidRequestException          (400)  # 6장 — 주로 COMMON_002, 도메인별 400(LOCATION_001, PLACE_003, ARRIVAL_002 등)
+     ├─ InvalidRequestException          (400)  # 6장 — 주로 COMMON_002, 도메인별 400(LOCATION_001, PLACE_003, ARRIVAL_002, ANOMALY_002 등)
      ├─ AuthenticationFailedException     (401)  # 8장 — AUTH_001~AUTH_006
-     ├─ AccessDeniedCustomException       (403)  # 8장 3단계(리소스 소유권)만 대상 — TARGET_002, LOCATION_003/004, ARRIVAL_001, EMERGENCY_001. GUARDIAN_001(Role 불일치, 2단계)은 Filter의 AccessDeniedHandler가 직접 처리하므로 이 예외 클래스를 거치지 않는다
+     ├─ AccessDeniedCustomException       (403)  # 8장 3단계(리소스 소유권)만 대상 — TARGET_002, LOCATION_003/004, ARRIVAL_001, EMERGENCY_001. 이상행동 목록/설명(`/api/guardian/anomalies/**`)의 소유권 위반도 신규 예외/코드 없이 이 클래스의 기존 `TARGET_002`를 그대로 쓴다. GUARDIAN_001(Role 불일치, 2단계)은 Filter의 AccessDeniedHandler가 직접 처리하므로 이 예외 클래스를 거치지 않는다
      ├─ ResourceNotFoundException         (404)
      │    ├─ CareTargetNotFoundException       # TARGET_001
      │    ├─ PlaceNotFoundException             # PLACE_001
      │    ├─ VisitHistoryNotFoundException      # VISIT_001
+     │    ├─ AnomalyEventNotFoundException      # ANOMALY_001 (이상행동 이벤트 없음)
      │    └─ ArrivalHistoryNotFoundException    # ARRIVAL_003
      ├─ DuplicateResourceException        (409)  # TARGET_003, PLACE_002, USER_002, USER_004
      ├─ ExternalApiException              (500)  # 9장 — AI_001, AI_002, NOTI_002

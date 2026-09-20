@@ -55,6 +55,7 @@ com.tracecare.backend
  │   ├─ location                 # 위치 조회/전송, LocationHistory
  │   ├─ place                    # 장소(안심구역), GeoFence(*)
  │   ├─ visit                    # 방문 히스토리(VisitHistory)
+ │   ├─ anomaly                  # 이상행동 감지(UnregisteredStayDetector, AnomalyScheduler)·목록/설명 조회(AnomalyEvent)
  │   ├─ notification              # 알림 조회/발송(NotificationHistory)
  │   └─ ai                       # AI 예측/케어 비서 연동(FastAPI 호출)
  │

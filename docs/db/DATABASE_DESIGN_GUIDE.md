@@ -3,7 +3,7 @@
 
 - **프로젝트**: 아이·노인 케어 위치추적 알림 시스템 (GIS)
 - **대상 DBMS**: PostgreSQL (+ pgvector), 캐시: Redis
-- **문서 버전**: v6.3 (§15.6 AnomalyScheduler 구현 확정 + idx_pas_day 인덱스 반영, 2026-09-16)
+- **문서 버전**: v6.4 (§15.7 /explain 고정 질문 템플릿 확정 + AnomalyEvent 스냅샷 컬럼 2종, 2026-09-20)
 - **전제**: 포트폴리오 프로젝트이나, 실 서비스 운영 시 수십만~수백만 사용자·수억 건의 위치 데이터를 처리하는 상황을 가정하여 설계
 
 본 문서는 데이터베이스 스키마·저장 전략·권한 모델의 DB 반영을 담당한다. 인증/인가 상세 정책은 Security Guide, 예외 처리는 Exception Handling Rule, API 응답 형식은 API Response Rule, 로그 보관·마스킹은 Logging Guide를 따르며 본 문서에서 재정의하지 않는다.
@@ -322,7 +322,7 @@ LocationHistory의 PK가 (id, recorded_at) 복합키인 이유: PostgreSQL 선�
 | 특정 기간 위치 이력 조회 | user_id + 날짜 기반 Select | "ID/날짜 기반 Select 쿼리" |
 | AI 케어비서 "오늘 이동기록 요약해줘" | 당일 날짜 범위로 LocationHistory 조회 | AI 케어 비서 시나리오 |
 | 자연어 검색 "지난주 병원 방문 기록 보여줘" | 지난주 날짜 범위로 LocationHistory 검색 | 자연어 검색 시나리오 |
-| AI 이상행동 설명 | 특정 시간대 범위 분석("2시간 이상 머무름") | 이상행동 설명 시나리오 |
+| 이상행동 설명(`/explain`) | 템플릿 조회 — `AnomalyEvent` 기반 고정 질문 조회(`LocationHistory` 직접 분석 아님) | 기획서 원안은 LLM이 특정 시간대 범위를 분석("2시간 이상 머무름")하는 시나리오였으나, LLM을 호출하지 않는 고정 질문 템플릿 방식으로 확정(2026-09-20, §15.7) |
 
 이 조회들은 원래부터 recorded_at 조건이 자연스럽게 포함되므로 파티셔닝과 충돌 없이 그대로 동작한다.
 
@@ -672,6 +672,8 @@ VECTOR(n)의 차원과 Gemini 무료 사용량 한도는 직접적 관계가 없
 "[Claude Code 전달용] 이상행동 감지 + `/explain` 최종 설계 검증 요청 v2" 검증 결과 반영해 확정. DDL은
 `tracecare_schema_ddl_2026-09-14_1.1.sql`. 신규 테이블 2개, 기존 테이블 컬럼 추가 2건.
 
+> **`/explain`은 LLM을 호출하지 않는 고정 질문 템플릿 방식이다**(2026-09-20 확정, §15.7). 이 절에서 "`/explain`"은 모두 이 템플릿 조회를 가리킨다.
+
 ### 15.1 PlaceArrivalSchedule (신규, Master Data)
 
 Guardian이 등록하는 요일별(`day_of_week`, ISO 1=월~7=일) 예상 도착 시각. `AnomalyScheduler`가 오늘 요일
@@ -714,6 +716,8 @@ AnomalyEvent에 대한 것인지" 추적할 방법이 없었다).
 - `place_id`(nullable, `ON DELETE SET NULL`): `ARRIVAL_DELAY`는 지연된 예정 장소, `UNREGISTERED_STAY`는
   근접한 등록 장소(있으면) 참고용.
 - `latitude`/`longitude`(nullable): `UNREGISTERED_STAY`만 채운다(미등록 위치 자체가 좌표로만 특정되므로).
+- `scheduled_at`(nullable, `ARRIVAL_DELAY` 전용)/`stay_started_at`(nullable, `UNREGISTERED_STAY` 전용): `/explain` 질문이 쓰는
+  예정 시각/체류 시작 시각의 스냅샷 컬럼(2026-09-20 추가, 역산하지 않음 — 근거와 채우는 지점은 §15.7 E).
 - `escalated_at`(nullable): **"최초 승격 시각"(정보/표시용)** — 2026-09-16(§4.2 확정: A) 재정의. 같은
   이벤트에 Guardian이 여러 명이고 각자 `escalate_minutes`가 다르면 승격이 Guardian별로 서로 다른 시점에
   개별로 일어날 수 있어, 이 컬럼은 "누가 이미 통지받았는지"를 판별하는 스캔 필터로 쓰지 않는다(그 판별은
@@ -725,7 +729,7 @@ AnomalyEvent에 대한 것인지" 추적할 방법이 없었다).
   `(place_id) WHERE place_id IS NOT NULL`(FK 대상 컬럼 인덱스 원칙, Partial), `(escalated_at) WHERE
   resolved_at IS NULL`(스케줄러의 "승격 대상 전체 스캔"이 특정 CareTarget에 한정되지 않아 위 복합
   인덱스로 커버되지 않으므로 별도 Partial Index로 지원, 검증 v2 §2.1 지적 반영).
-- `/explain`의 "과거 비슷한 위치 방문 이력"(UNREGISTERED_STAY 마지막 질문)은 좌표 근접 조회가 필요한데,
+- `/explain`의 "과거 비슷한 위치에서 10분 이상 머문 이력"(UNREGISTERED_STAY 마지막 질문, 원본은 과거 UNREGISTERED_STAY 이벤트, §15.7)은 좌표 근접 조회가 필요한데,
   프로젝트에 PostGIS/earthdistance 확장이 없다(검증 v2 §2.6에서 확인). 정밀한 공간 인덱스 대신 Bounding
   Box로 후보를 좁힌 뒤 `GeoDistanceCalculator`(Haversine, GeoFenceService가 이미 쓰는 유틸)로 재계산하는
   근사 방식을 쓴다 — 기존 Place 중복 판정(`PlaceService.isDuplicate`)과 동일한 절충이다.
@@ -790,3 +794,87 @@ AnomalyEvent에 대한 것인지" 추적할 방법이 없었다).
 - 알림의 비동기/배치 발송 전환(`@Async`/메시지 큐 등으로의 전환)은 이번 범위 밖이다 — 현재는 승격 대상을
   순차 동기 호출로 처리한다. 도입 여부는 `.claude/rules/collaboration.md`의 "비동기 처리 도입 여부" 기준에
   따라 별도 세션에서 트레이드오프를 제시하고 결정할 로드맵 항목으로 남긴다.
+
+### 15.7 `/explain` — 고정 질문 템플릿, LLM 미사용 (2026-09-20 확정)
+
+**확정 사항**
+
+- `/explain`은 **LLM(Gemini)을 호출하지 않는다.** 이상행동 유형별로 고정된 질문 템플릿을 사용자에게 보여주고,
+  사용자가 질문을 선택하면 서버가 **저장된 데이터를 조회해 답변 문장을 조립**해서 반환한다. 기획서 원안(LLM이
+  `LocationHistory`의 시간대 범위를 분석해 자연어로 설명, §5.1-A)은 채택하지 않는다.
+- URI는 `GET /api/guardian/anomalies/{anomalyEventId}/explain?question={questionKey}`이다. 기존
+  `POST /api/guardian/ai/explain`은 폐기됐다(API_Specification.md §3.9, §7.3).
+- 에러 코드 도메인은 LLM 계열(`AI_*`)이 아니라 `ANOMALY_*`를 쓴다(성공 `ANOMALY_001` 목록/`002` 설명/`003` 카탈로그,
+  에러 `ANOMALY_001` 이벤트 없음 404/`002` 잘못된 질문 키 400 — 성공/에러 독립 번호 공간). `AI_002`/`AI_004`는 삭제되지 않는다 — `/chat`,
+  `/summary`, `/search`, `/report/weekly`가 그대로 사용한다.
+- 응답은 질문 종류와 무관하게 항상 `answer: string` 하나다.
+- Audit Log는 이번 범위에 포함하지 않는다(위치 노출 API 전체 공통 도입 로드맵 항목, Logging_Guide.md §12.1).
+
+**질문 카탈로그와 관리 방식**
+
+유형별 질문 목록(`ARRIVAL_DELAY` 7개, `UNREGISTERED_STAY` 8개, v2 §1.5)의 키와 표시 문구는 서버가
+`GET /api/guardian/anomalies/questions?type=`으로 내려준다(Frontend 하드코딩 아님, API_Specification.md
+§3.9). **카탈로그는 DB 테이블이 아니라 Backend 코드 상수(enum)로 관리한다.** 질문마다 답변을 조립하는 로직이 코드에
+있어 "키 ↔ 조립 코드"가 1:1로 묶여 있으므로 질문을 추가/삭제하려면 어차피 코드 배포가 필요하고, 목록만 DB에 두면 오히려
+"DB에는 키가 있는데 조립 코드가 없는" 불일치만 생긴다. 사용자/테넌트별 변형이나 다국어 요구도 현재 없고, 15개짜리 고정 목록에
+테이블·시드 데이터·DDL 버전 관리를 붙일 이득이 없다. 다국어나 운영 중 문구 수정 요구가 생기면 그때 재검토한다.
+
+| 유형 | `questionKey` | 답변에 쓰는 데이터 |
+|---|---|---|
+| `ARRIVAL_DELAY` | `DELAY_REASON` | `scheduled_at`과 `detected_at`의 차이(분)로 "예정 시각 N분 뒤까지 도착 기록이 없어 감지" 안내 |
+| `ARRIVAL_DELAY` | `DELAY_EXPECTED_TIME` | `scheduled_at` |
+| `ARRIVAL_DELAY` | `DELAY_DURATION` | 진행 중이면 현재 시각 − `scheduled_at`, 해제됐으면 `resolved_at` − `scheduled_at` |
+| `ARRIVAL_DELAY` | `DELAY_CURRENT_LOCATION` | CareTarget의 마지막 수신 위치(좌표, 수신 시각) — Redis `location:latest` 우선, 없으면 `LocationHistory` |
+| `ARRIVAL_DELAY` | `DELAY_LAST_VISIT` | 이 이벤트의 `place_id` 장소에 대한 가장 최근 `VisitHistory.arrival_time` |
+| `ARRIVAL_DELAY` | `DELAY_COUNT_7D` / `DELAY_COUNT_30D` | 같은 CareTarget·같은 장소(`place_id`)의 `ARRIVAL_DELAY` 이벤트 수(최근 7일/30일, `detected_at` 기준) |
+| `UNREGISTERED_STAY` | `STAY_REASON` | `stay_started_at`과 `detected_at`의 차이(분)로 "등록되지 않은 장소에서 N분 이상 머물러 감지" 안내 |
+| `UNREGISTERED_STAY` | `STAY_LOCATION` | 이벤트의 `latitude`/`longitude` |
+| `UNREGISTERED_STAY` | `STAY_STARTED_AT` | `stay_started_at` |
+| `UNREGISTERED_STAY` | `STAY_ELAPSED` | 진행 중이면 현재 시각 − `stay_started_at`, 해제됐으면 `resolved_at` − `stay_started_at` |
+| `UNREGISTERED_STAY` | `STAY_ONGOING` | `resolved_at` null 여부(해제됐다면 해제 시각) |
+| `UNREGISTERED_STAY` | `STAY_NEAREST_PLACE_DISTANCE` | `place_id`(감지 시점의 최근접 등록 장소)의 현재 좌표와 이벤트 좌표 사이 거리(`GeoDistanceCalculator`) |
+| `UNREGISTERED_STAY` | `STAY_COUNT_7D` | 같은 CareTarget의 `UNREGISTERED_STAY` 이벤트 수(최근 7일) |
+| `UNREGISTERED_STAY` | `STAY_SIMILAR_PAST` | 아래 "F" 참고 |
+
+- 마지막 두 질문("최근 N일 횟수", "과거 비슷한 위치 이력")만 선택된 이벤트 하나가 아니라 같은 유형/장소(또는 근접 좌표)의
+  과거 여러 `AnomalyEvent`를 집계해서 답한다.
+- 답변에 필요한 값이 없으면(Soft Delete된 Place, 아래 스냅샷 컬럼 추가 이전에 생성돼 값이 null인 이벤트 등)
+  에러가 아니라 "확인할 수 없어요"류의 안내 문장으로 답한다.
+- `DELAY_LAST_VISIT`의 "마지막 방문"은 **이 이벤트가 가리키는 장소**의 가장 최근 방문으로 해석했다(v2 §1.5의 문구
+  "마지막 방문 시각"이 어느 장소인지 명시하지 않아 이벤트 맥락에 맞게 정한 구현 세부다).
+
+**E. 예정 시각/체류 시작 시각 — 역산하지 않고 스냅샷 컬럼으로 저장 (확정)**
+
+"원래 도착 예정 시각"과 "체류 시작 시각"은 `AnomalyEvent` 생성 시점의 값을 그대로 저장한다. 역산(`detected_at`에서
+감지 기준 분을 뺌)은 감지 기준 설정값(`anomaly.*-detect-minutes`)이 바뀌면 과거 이벤트 값이 틀어지고,
+`PlaceArrivalSchedule`은 수정·삭제(Place 삭제 시 CASCADE)될 수 있어 조회 시점 값과 이벤트 당시 값이 달라질 수 있어 채택하지
+않았다. 후보(`anomaly:candidate`)의 `startedAt`은 감지 시 Redis에서 삭제되므로 저장하지 않으면 이후 복원할 수 없다.
+
+| 컬럼 | 타입 | NULL | 전용 유형 | 채우는 지점 |
+|---|---|---|---|---|
+| `scheduled_at` | TIMESTAMPTZ | NULL 허용 | `ARRIVAL_DELAY` | `AnomalyScheduler` 역할1이 이벤트를 생성할 때, 그날의 `PlaceArrivalSchedule.expected_arrival_time`을 서버 타임존 기준 절대 시각으로 변환한 값(`detected_at` 계산에 이미 쓰는 예정 시각) |
+| `stay_started_at` | TIMESTAMPTZ | NULL 허용 | `UNREGISTERED_STAY` | `UnregisteredStayDetector`가 이벤트를 생성할 때, 후보(`anomaly:candidate`)의 `startedAt`(반경 안에서 고정되는 최초 미등록 위치 수신 시각) |
+
+- 두 컬럼 모두 nullable이다 — 다른 유형의 이벤트는 값이 없고(유형 전용), 이 컬럼이 추가되기 이전에 생성된 이벤트도
+  값이 없다. `detected_at`의 의미(`scheduled_at`/`stay_started_at` + 감지 기준 분)는 바뀌지 않는다.
+- CHECK 제약 2개를 함께 둔다: `scheduled_at`은 `type='ARRIVAL_DELAY'`일 때만, `stay_started_at`은
+  `type='UNREGISTERED_STAY'`일 때만 값을 가질 수 있다(각각 "전용" 의미를 DB 수준에서 강제). 기존 행은 두 컬럼이 모두 NULL이라
+  이 제약에 걸리지 않는다.
+- 조회 조건으로 쓰지 않는 표시용 컬럼이라 인덱스는 추가하지 않는다.
+- DDL은 `tracecare_schema_ddl_2026-09-20_1.3.sql`이며 `AnomalyEvent`에 이 컬럼 2개(와 CHECK 2개)를 추가하는 것 외에
+  다른 변경은 없다.
+
+**F. "과거 비슷한 위치" — 원본은 과거 `UNREGISTERED_STAY` 이벤트뿐 (확정)**
+
+`STAY_SIMILAR_PAST`의 질문 문구는 **"과거 비슷한 위치에서 10분 이상 머문 이력이 있나요?"** 이다. 조회 대상은 과거
+`AnomalyEvent`(`type=UNREGISTERED_STAY`)뿐이다 — `AnomalyEvent`는 감지 기준 이상 머문 경우에만 생성되므로 "10분 이상 머문
+이력"이라는 문구와 정확히 일치한다. `VisitHistory`에는 미등록 장소 방문이 생성되지 않고(`VisitHistory.arrive()`가
+`registeredPlace=true`를 고정하며 `GeoFenceService`가 등록 Place에 매칭될 때만 호출), `LocationHistory` 원본을 직접 분석하지도
+않는다.
+
+- "비슷한 위치"의 기준: 같은 CareTarget의 과거 `UNREGISTERED_STAY` 이벤트 중 좌표가 이 이벤트 좌표로부터
+  `anomaly.unregistered-stay-radius-meters`(기본 50m, "같은 곳에 머무름" 판정 반경과 동일 기준) 이내인 것. 위경도 범위(Bounding
+  Box)로 후보를 좁힌 뒤 `GeoDistanceCalculator`(Haversine)로 재계산한다(§15.2의 PostGIS 미사용 근사 방식과 동일).
+- 조회 기간은 최근 90일(목록 API의 최대 조회 범위와 동일)이고, 자기 자신은 제외한다.
+- 질문 문구의 "10분"은 고정 문구다. `anomaly.unregistered-stay-detect-minutes` 설정값을 바꾸면 문구와 실제 기준이 어긋날 수
+  있다(현재 기본값 10분과 일치).

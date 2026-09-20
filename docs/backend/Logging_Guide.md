@@ -198,6 +198,27 @@ log.info("event=API_REQUEST_END, userId={}, uri={}, status={}, elapsedMs={}", us
 - 개발 환경에서는 `spring.jpa.show-sql=true` 또는 MyBatis 로그로 SQL을 확인할 수 있으나, 운영 환경에서는 Query 식별자(Mapper ID, Repository 메서드명)와 소요 시간만 남긴다.
 - 단순 단건 조회(`findById` 등 반복 호출되는 경량 조회)까지 매번 로그를 남기지 않는다. "중요 Query"는 대량 조회, 쓰기 작업, 도메인상 의미 있는 조회(관계 검증 조회 등)로 한정한다.
 
+### 4.4 이상행동(ANOMALY) 표준 이벤트명
+
+이상행동 감지 기능(`UnregisteredStayDetector`, `AnomalyScheduler`, DATABASE_DESIGN_GUIDE.md §15)이 이미 코드에서 쓰고 있는 이벤트명을 문서로 역반영한 것이다. 이 도메인에서 새 로그를 추가할 때는 아래 이벤트명을 먼저 재사용한다. 좌표 원본은 7장 규칙에 따라 로그에 남기지 않고 `careTargetId`/`anomalyEventId`/`placeId` 같은 식별자만 남긴다.
+
+| 이벤트명 | 발생 시점 | 로그 레벨 |
+|---|---|---|
+| `ANOMALY_UNREGISTERED_STAY_DETECTED` | 등록 안 된 곳에서 감지 기준(기본 10분) 이상 머물러 `UNREGISTERED_STAY` 이벤트 생성 | INFO |
+| `ANOMALY_UNREGISTERED_STAY_RESOLVED_BY_ARRIVAL` | 진행 중이던 `UNREGISTERED_STAY`가 등록 장소 도착으로 해제 | INFO |
+| `ANOMALY_UNREGISTERED_STAY_RESOLVED_BY_MOVEMENT` | 진행 중이던 `UNREGISTERED_STAY`가 반경 이탈(이동)로 해제 | INFO |
+| `ANOMALY_ARRIVAL_DELAY_DETECTED` | 스케줄러가 예상 도착 시각+감지 기준을 넘긴 미도착 건을 감지해 `ARRIVAL_DELAY` 이벤트 생성 | INFO |
+| `ANOMALY_ARRIVAL_DELAY_RESOLVED` | 진행 중이던 `ARRIVAL_DELAY`가 도착 확인으로 해제 | INFO |
+| `ANOMALY_PAUSE_AUTO_RESUMED` | `paused_until` 경과로 Guardian 알림 모드가 이전 모드로 자동 복귀 | INFO |
+| `ANOMALY_SCHEDULER_TICK_STARTED` / `ANOMALY_SCHEDULER_TICK_COMPLETED` | 스케줄러 tick 시작 / 정상 완료 | INFO |
+| `ANOMALY_SCHEDULER_TICK_SKIPPED` | 다른 인스턴스가 분산 락을 보유해 이번 tick 전체를 건너뜀 | INFO |
+| `ANOMALY_SCHEDULER_LOCK_ACQUIRE_FAILED` | Redis 장애로 분산 락 획득 자체가 실패(락 없이 진행, fail-open) | WARN |
+| `ANOMALY_SCHEDULER_LOCK_RELEASE_FAILED` | 분산 락 해제 실패(TTL로 자연 만료) | WARN |
+| `ANOMALY_CANDIDATE_CACHE_READ_FAILED` / `_WRITE_FAILED` / `_EVICT_FAILED` | `anomaly:candidate:*` 캐시 조회/기록/삭제 실패(예외 없이 넘어감, Cache_Strategy_Guide.md §3.2) | WARN |
+| `ANOMALY_ACTIVE_CACHE_READ_FAILED` / `_WRITE_FAILED` / `_EVICT_FAILED` | `anomaly:active:*` 캐시 조회/기록/삭제 실패(PostgreSQL로 폴백) | WARN |
+
+이상행동 승격 알림의 FCM 발송 실패는 별도 이벤트명을 만들지 않고 기존 알림 발송 실패 이벤트 `NOTIFICATION_SEND_FAILED`(WARN, 알림 `type`으로 구분)를 그대로 쓴다.
+
 ---
 
 ## 5. Security Logging Policy
@@ -431,6 +452,8 @@ log.error("event=AI_SERVER_ERROR, targetService=fastapi-ai-server, errorCode={}"
 | 보호 대상자 등록 | Guardian-CareTarget 관계 생성/해제 |
 | 위치 조회 | Guardian의 CareTarget 위치 조회(현재/이력) — 조회 자체가 민감 행위이므로 감사 대상 |
 | 관리자 기능 수행 | `/api/admin/**` 전 API 호출(5.2 `ADMIN_API_ACCESS`와 동일 이벤트를 Audit 테이블에도 적재) |
+
+> **이상행동 설명(`GET /api/guardian/anomalies/{anomalyEventId}/explain`)의 "현재 위치" 질문**(ARRIVAL_DELAY 질문 목록, DATABASE_DESIGN_GUIDE.md §15.7)은 CareTarget의 현재 위치를 Guardian에게 보여주므로 위 표의 **"위치 조회" Audit 대상에 해당한다.** **이 API의 Audit Log 적재는 이번 범위(§4.3 구현)에 포함하지 않는다(2026-09-20 결정)** — 좌표를 노출하는 API 전체(위치 조회 API, 이상행동 목록/설명 등)에 공통으로 도입할 로드맵 항목으로 남긴다(참고로 현재 코드베이스에는 Audit Log 자체가 아직 구현돼 있지 않다).
 
 ### 12.2 저장 데이터
 
