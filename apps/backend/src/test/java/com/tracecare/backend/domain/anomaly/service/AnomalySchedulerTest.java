@@ -1,6 +1,7 @@
 package com.tracecare.backend.domain.anomaly.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -43,6 +44,7 @@ import com.tracecare.backend.domain.anomaly.repository.PlaceArrivalScheduleRepos
 import com.tracecare.backend.domain.anomaly.repository.PlaceArrivalScheduleRepository.ScheduledPlace;
 import com.tracecare.backend.domain.guardian.entity.GuardianTarget;
 import com.tracecare.backend.domain.guardian.repository.GuardianTargetRepository;
+import com.tracecare.backend.domain.guardian.service.GuardianNotificationSettingsService;
 import com.tracecare.backend.domain.notification.repository.NotificationHistoryRepository;
 import com.tracecare.backend.domain.notification.service.NotificationDispatchService;
 import com.tracecare.backend.domain.notification.service.NotificationDispatchService.AnomalyEscalationTarget;
@@ -67,6 +69,7 @@ class AnomalySchedulerTest {
     @Mock private AnomalyEventRepository anomalyEventRepository;
     @Mock private VisitHistoryRepository visitHistoryRepository;
     @Mock private GuardianTargetRepository guardianTargetRepository;
+    @Mock private GuardianNotificationSettingsService guardianNotificationSettingsService;
     @Mock private NotificationHistoryRepository notificationHistoryRepository;
     @Mock private NotificationDispatchService notificationDispatchService;
     @Mock private RedisTemplate<String, Object> redisTemplate;
@@ -80,6 +83,7 @@ class AnomalySchedulerTest {
                 anomalyEventRepository,
                 visitHistoryRepository,
                 guardianTargetRepository,
+                guardianNotificationSettingsService,
                 notificationHistoryRepository,
                 notificationDispatchService,
                 redisTemplate,
@@ -453,42 +457,59 @@ class AnomalySchedulerTest {
     // 역할3: PAUSED 자동 복귀
     // ---------------------------------------------------------------------
 
-    @Test
-    @DisplayName("paused_until이 지난 Guardian은 이전 모드로 자동 복귀한다")
-    void resumePausedGuardians_pauseDue_revertsToPreviousMode() {
-        // given
+    private GuardianTarget pausedGuardian(Instant pauseNow, int durationMinutes) {
         GuardianTarget guardian =
                 GuardianTarget.createActive(11L, CARE_TARGET_ID, GuardianTarget.ROLE_SUB);
         ReflectionTestUtils.setField(guardian, "id", 1L);
-        guardian.pause(Instant.now().minus(2, ChronoUnit.HOURS), 30); // paused_until = 1시간 30분 전(이미 지남)
+        guardian.pause(pauseNow, durationMinutes);
         when(guardianTargetRepository.findByNotificationMode(GuardianTarget.NOTIFICATION_MODE_PAUSED))
                 .thenReturn(List.of(guardian));
+        return guardian;
+    }
+
+    @Test
+    @DisplayName("paused_until이 지난 Guardian은 잠금을 잡고 다시 확인하는 서비스(resumeIfDue)에 복귀를 맡긴다 — 스케줄러가 직접 저장하지 않는다")
+    void resumePausedGuardians_pauseDue_delegatesToLockedResumeIfDue() {
+        // given — paused_until = 1시간 30분 전(이미 지남)
+        pausedGuardian(Instant.now().minus(2, ChronoUnit.HOURS), 30);
+        when(guardianNotificationSettingsService.resumeIfDue(eq(1L), any(Instant.class)))
+                .thenReturn(true);
 
         // when
         scheduler().tick();
 
-        // then
-        assertThat(guardian.getNotificationMode()).isEqualTo(GuardianTarget.NOTIFICATION_MODE_HYBRID);
-        assertThat(guardian.getPausedUntil()).isNull();
-        verify(guardianTargetRepository).save(guardian);
+        // then — 잠금 없는 읽기 값으로 엔티티를 직접 고치고 save하던 옛 경로(갱신 유실 위험)를 쓰지 않는다
+        verify(guardianNotificationSettingsService).resumeIfDue(eq(1L), any(Instant.class));
+        verify(guardianTargetRepository, never()).save(any());
     }
 
     @Test
-    @DisplayName("paused_until이 아직 남은 Guardian은 복귀시키지 않는다")
-    void resumePausedGuardians_pauseNotYetDue_doesNotRevert() {
-        // given
-        GuardianTarget guardian =
-                GuardianTarget.createActive(11L, CARE_TARGET_ID, GuardianTarget.ROLE_SUB);
-        ReflectionTestUtils.setField(guardian, "id", 1L);
-        guardian.pause(Instant.now(), 60); // paused_until = 지금부터 60분(아직 한참 남음)
-        when(guardianTargetRepository.findByNotificationMode(GuardianTarget.NOTIFICATION_MODE_PAUSED))
-                .thenReturn(List.of(guardian));
+    @DisplayName("paused_until이 아직 남은 Guardian은 복귀 요청 자체를 하지 않는다")
+    void resumePausedGuardians_pauseNotYetDue_doesNotCallResume() {
+        // given — paused_until = 지금부터 60분(아직 한참 남음)
+        GuardianTarget guardian = pausedGuardian(Instant.now(), 60);
 
         // when
         scheduler().tick();
 
         // then
         assertThat(guardian.getNotificationMode()).isEqualTo(GuardianTarget.NOTIFICATION_MODE_PAUSED);
+        verify(guardianNotificationSettingsService, never())
+                .resumeIfDue(any(Long.class), any(Instant.class));
+        verify(guardianTargetRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("오래된 목록상 복귀 대상이어도 그 사이 사용자가 연장/해제했다면(resumeIfDue=false) 아무 것도 하지 않고 tick이 정상 완료된다")
+    void resumePausedGuardians_staleCandidateAlreadyHandled_isSkippedWithoutError() {
+        // given — 목록은 "지남"이지만 잠금 후 재확인에서 이미 처리됨
+        pausedGuardian(Instant.now().minus(2, ChronoUnit.HOURS), 30);
+        when(guardianNotificationSettingsService.resumeIfDue(eq(1L), any(Instant.class)))
+                .thenReturn(false);
+
+        // when & then
+        assertThatCode(() -> scheduler().tick()).doesNotThrowAnyException();
+        verify(guardianNotificationSettingsService).resumeIfDue(eq(1L), any(Instant.class));
         verify(guardianTargetRepository, never()).save(any());
     }
 }

@@ -48,4 +48,13 @@ public interface GuardianTargetRepository extends JpaRepository<GuardianTarget, 
                     + "WHERE gt.guardianId = :guardianId AND gt.targetId = :targetId AND gt.status = 'ACTIVE'")
     Optional<GuardianTarget> findActiveByGuardianIdAndTargetIdForUpdate(
             @Param("guardianId") Long guardianId, @Param("targetId") Long targetId);
+
+    /**
+     * {@code AnomalyScheduler}의 PAUSED 자동 복귀처럼 (guardian, target)이 아니라 행 id만 아는 경로에서 행을 잠근 채 상태를
+     * <b>다시 확인</b>하기 위한 조회다(DATABASE_DESIGN_GUIDE.md §15.8). 사용자 쓰기 경로와 같은 행 잠금을 잡으므로 두 경로가 서로 순서대로
+     * 처리된다. 관계 상태(ACTIVE/TERMINATED)는 거르지 않는다 — 해제된 행의 정지도 기존과 똑같이 복귀시킨다.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT gt FROM GuardianTarget gt WHERE gt.id = :id")
+    Optional<GuardianTarget> findByIdForUpdate(@Param("id") Long id);
 }

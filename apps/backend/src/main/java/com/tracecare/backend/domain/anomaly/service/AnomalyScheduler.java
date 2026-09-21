@@ -26,6 +26,7 @@ import com.tracecare.backend.domain.anomaly.repository.PlaceArrivalScheduleRepos
 import com.tracecare.backend.domain.anomaly.repository.PlaceArrivalScheduleRepository.ScheduledPlace;
 import com.tracecare.backend.domain.guardian.entity.GuardianTarget;
 import com.tracecare.backend.domain.guardian.repository.GuardianTargetRepository;
+import com.tracecare.backend.domain.guardian.service.GuardianNotificationSettingsService;
 import com.tracecare.backend.domain.notification.repository.NotificationHistoryRepository;
 import com.tracecare.backend.domain.notification.service.NotificationDispatchService;
 import com.tracecare.backend.domain.notification.service.NotificationDispatchService.AnomalyEscalationTarget;
@@ -59,6 +60,7 @@ public class AnomalyScheduler {
     private final AnomalyEventRepository anomalyEventRepository;
     private final VisitHistoryRepository visitHistoryRepository;
     private final GuardianTargetRepository guardianTargetRepository;
+    private final GuardianNotificationSettingsService guardianNotificationSettingsService;
     private final NotificationHistoryRepository notificationHistoryRepository;
     private final NotificationDispatchService notificationDispatchService;
     private final RedisTemplate<String, Object> redisTemplate;
@@ -72,6 +74,7 @@ public class AnomalyScheduler {
             AnomalyEventRepository anomalyEventRepository,
             VisitHistoryRepository visitHistoryRepository,
             GuardianTargetRepository guardianTargetRepository,
+            GuardianNotificationSettingsService guardianNotificationSettingsService,
             NotificationHistoryRepository notificationHistoryRepository,
             NotificationDispatchService notificationDispatchService,
             RedisTemplate<String, Object> redisTemplate,
@@ -83,6 +86,7 @@ public class AnomalyScheduler {
         this.anomalyEventRepository = anomalyEventRepository;
         this.visitHistoryRepository = visitHistoryRepository;
         this.guardianTargetRepository = guardianTargetRepository;
+        this.guardianNotificationSettingsService = guardianNotificationSettingsService;
         this.notificationHistoryRepository = notificationHistoryRepository;
         this.notificationDispatchService = notificationDispatchService;
         this.redisTemplate = redisTemplate;
@@ -240,9 +244,11 @@ public class AnomalyScheduler {
                 guardianTargetRepository.findByNotificationMode(
                         GuardianTarget.NOTIFICATION_MODE_PAUSED);
         for (GuardianTarget guardian : paused) {
-            if (guardian.isPauseDue(now)) {
-                guardian.resumeFromPause();
-                guardianTargetRepository.save(guardian);
+            // 위 목록은 잠금 없이 읽은 값이라 이미 오래된 상태일 수 있다(그 사이 사용자가 정지를 연장/해제했을 수 있음). 복귀 대상
+            // 후보만 걸러 내고, 실제 변경은 행을 잠근 뒤 상태를 다시 확인하는 서비스에 맡겨 사용자 요청과 순서대로 처리되게 한다
+            // (DATABASE_DESIGN_GUIDE.md §15.8).
+            if (guardian.isPauseDue(now)
+                    && guardianNotificationSettingsService.resumeIfDue(guardian.getId(), now)) {
                 log.info(
                         "event=ANOMALY_PAUSE_AUTO_RESUMED, guardianTargetId={}", guardian.getId());
             }

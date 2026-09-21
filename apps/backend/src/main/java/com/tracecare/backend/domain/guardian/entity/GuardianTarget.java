@@ -143,6 +143,20 @@ public class GuardianTarget {
     }
 
     /**
+     * API에 노출하는 "기본 모드" — 정지 중이 아니면 {@code notificationMode} 그대로, 정지 중이면 정지가 풀린 뒤 돌아갈 모드다
+     * ({@code previousNotificationMode}, 기록이 없으면 {@code HYBRID}). API 응답({@code notificationMode})과 {@link #resumeFromPause}의
+     * 복귀 모드가 같은 규칙을 쓰도록 여기서 한 번만 계산한다(API_Specification.md §3.10 오버레이).
+     */
+    public String baseNotificationMode() {
+        if (!isPaused()) {
+            return notificationMode;
+        }
+        return previousNotificationMode != null
+                ? previousNotificationMode
+                : NOTIFICATION_MODE_HYBRID;
+    }
+
+    /**
      * 기본 알림 모드와 승격 분을 저장한다(API_Specification.md §3.10 PUT, DATABASE_DESIGN_GUIDE.md §15.8).
      *
      * <ul>
@@ -213,10 +227,7 @@ public class GuardianTarget {
         if (!isPaused()) {
             return;
         }
-        this.notificationMode =
-                previousNotificationMode != null
-                        ? previousNotificationMode
-                        : NOTIFICATION_MODE_HYBRID;
+        this.notificationMode = baseNotificationMode();
         this.previousNotificationMode = null;
         this.pausedUntil = null;
     }
