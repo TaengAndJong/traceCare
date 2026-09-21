@@ -460,7 +460,7 @@ class AnomalySchedulerTest {
         GuardianTarget guardian =
                 GuardianTarget.createActive(11L, CARE_TARGET_ID, GuardianTarget.ROLE_SUB);
         ReflectionTestUtils.setField(guardian, "id", 1L);
-        guardian.pause(Instant.now().minusSeconds(60)); // 이미 지남
+        guardian.pause(Instant.now().minus(2, ChronoUnit.HOURS), 30); // paused_until = 1시간 30분 전(이미 지남)
         when(guardianTargetRepository.findByNotificationMode(GuardianTarget.NOTIFICATION_MODE_PAUSED))
                 .thenReturn(List.of(guardian));
 
@@ -480,7 +480,7 @@ class AnomalySchedulerTest {
         GuardianTarget guardian =
                 GuardianTarget.createActive(11L, CARE_TARGET_ID, GuardianTarget.ROLE_SUB);
         ReflectionTestUtils.setField(guardian, "id", 1L);
-        guardian.pause(Instant.now().plus(1, ChronoUnit.HOURS)); // 아직 한참 남음
+        guardian.pause(Instant.now(), 60); // paused_until = 지금부터 60분(아직 한참 남음)
         when(guardianTargetRepository.findByNotificationMode(GuardianTarget.NOTIFICATION_MODE_PAUSED))
                 .thenReturn(List.of(guardian));
 
