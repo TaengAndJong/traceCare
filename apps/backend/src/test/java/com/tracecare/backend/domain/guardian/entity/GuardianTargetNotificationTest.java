@@ -384,6 +384,29 @@ class GuardianTargetNotificationTest {
     }
 
     // ---------------------------------------------------------------------
+    // baseNotificationMode — API가 노출하는 "기본 모드"(PAUSED는 노출하지 않음)
+    // ---------------------------------------------------------------------
+
+    @Test
+    @DisplayName("기본 모드 — 정지 중이 아니면 notification_mode, 정지 중이면 previous(없으면 HYBRID)이며 PAUSED는 절대 나오지 않는다")
+    void baseNotificationMode_overlay_neverExposesPaused() {
+        // given
+        GuardianTarget notPaused = guardian();
+        notPaused.updateNotificationMode(GuardianTarget.NOTIFICATION_MODE_REPORT_ONLY, 30, 60);
+        GuardianTarget pausedWithPrevious =
+                pausedGuardian(GuardianTarget.NOTIFICATION_MODE_REALTIME, after(Duration.ofMinutes(5)));
+        GuardianTarget pausedWithoutPrevious = pausedGuardian(null, after(Duration.ofMinutes(5)));
+
+        // then
+        assertThat(notPaused.baseNotificationMode())
+                .isEqualTo(GuardianTarget.NOTIFICATION_MODE_REPORT_ONLY);
+        assertThat(pausedWithPrevious.baseNotificationMode())
+                .isEqualTo(GuardianTarget.NOTIFICATION_MODE_REALTIME);
+        assertThat(pausedWithoutPrevious.baseNotificationMode())
+                .isEqualTo(GuardianTarget.NOTIFICATION_MODE_HYBRID);
+    }
+
+    // ---------------------------------------------------------------------
     // isPauseDue
     // ---------------------------------------------------------------------
 
