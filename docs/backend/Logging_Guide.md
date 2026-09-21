@@ -209,7 +209,11 @@ log.info("event=API_REQUEST_END, userId={}, uri={}, status={}, elapsedMs={}", us
 | `ANOMALY_UNREGISTERED_STAY_RESOLVED_BY_MOVEMENT` | 진행 중이던 `UNREGISTERED_STAY`가 반경 이탈(이동)로 해제 | INFO |
 | `ANOMALY_ARRIVAL_DELAY_DETECTED` | 스케줄러가 예상 도착 시각+감지 기준을 넘긴 미도착 건을 감지해 `ARRIVAL_DELAY` 이벤트 생성 | INFO |
 | `ANOMALY_ARRIVAL_DELAY_RESOLVED` | 진행 중이던 `ARRIVAL_DELAY`가 도착 확인으로 해제 | INFO |
-| `ANOMALY_PAUSE_AUTO_RESUMED` | `paused_until` 경과로 Guardian 알림 모드가 이전 모드로 자동 복귀 | INFO |
+| `ANOMALY_PAUSE_AUTO_RESUMED` | `paused_until` 경과로 Guardian 알림 모드가 이전 모드로 자동 복귀(행을 잠근 뒤 재확인한 경우에만 기록, API_Specification.md §3.10) | INFO |
+| `ANOMALY_NOTIFICATION_SETTINGS_UPDATED` | Guardian이 자신의 이상행동 알림 설정(기본 모드/승격 분)을 저장(`PUT .../notification-settings`). 모드와 정지 여부만 남기고 값 원문은 남기지 않는다 | INFO |
+| `ANOMALY_PAUSE_STARTED` | Guardian이 이상행동 알림을 일시정지하거나 정지 시간을 늘림(`extended`로 신규/연장 구분) | INFO |
+| `ANOMALY_PAUSE_RESUMED_BY_USER` | Guardian이 정지 중인 이상행동 알림을 즉시 재개(정지 중이 아니어서 no-op인 호출은 기록하지 않음) | INFO |
+| `ANOMALY_SETTINGS_LOCK_CONFLICT` | 알림 설정 행 잠금 경합 실패(`path`로 `user_write`(COMMON_008 409로 응답)/`auto_resume`(이번 tick 건너뜀) 구분) | WARN |
 | `ANOMALY_SCHEDULER_TICK_STARTED` / `ANOMALY_SCHEDULER_TICK_COMPLETED` | 스케줄러 tick 시작 / 정상 완료 | INFO |
 | `ANOMALY_SCHEDULER_TICK_SKIPPED` | 다른 인스턴스가 분산 락을 보유해 이번 tick 전체를 건너뜀 | INFO |
 | `ANOMALY_SCHEDULER_LOCK_ACQUIRE_FAILED` | Redis 장애로 분산 락 획득 자체가 실패(락 없이 진행, fail-open) | WARN |
