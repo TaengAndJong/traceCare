@@ -391,6 +391,79 @@ VisitHistory 기준(가공된 "방문 단위" 데이터). 원본 GPS 좌표 나�
 
 성공 코드: `ANOMALY_002` · 주요 실패 코드: `ANOMALY_001`(404, 이벤트 없음), `ANOMALY_002`(400, 잘못된 질문 키), `TARGET_002`(403, 소유권 불일치), `COMMON_002`(400, `question` 누락)
 
+### 3.10 알림 설정 — 이상행동 알림 (GuardianTarget)
+
+Guardian이 **자신의** 이상행동 알림 방식(`GuardianTarget.notification_mode`/`escalate_minutes_*`/`paused_until`, DATABASE_DESIGN_GUIDE.md §15.3)을 조회·변경하고 일시정지하는 API다. 대상이 `GuardianTarget` 행이라 성공 코드는 `TARGET_*` 도메인을 쓴다(API_Response_Rule.md §2.3).
+
+> **적용 범위 (반드시 지킬 것)**: 이 절의 설정과 일시정지는 **이상행동 알림(`ARRIVAL_DELAY`/`UNREGISTERED_STAY`의 즉시 알림 승격)에만** 적용된다. **GeoFence 도착 확인 알림과 긴급 연락(`EMERGENCY_*`)은 어떤 모드(`REPORT_ONLY`, 일시정지 포함)에서도 영향받지 않는다.** 현재 `notification_mode`를 읽는 곳은 `AnomalyScheduler`의 승격 판단뿐이며, 안전 기능(긴급 연락)은 이 설정으로 억제하지 않는다(fail-open 금지, .claude/rules/exception.md).
+
+**화면 문구 가이드**: 버튼·라벨은 반드시 **"이상행동 알림 멈추기"**로 쓴다. 그냥 "알림 멈추기"라고 하면 도착 확인 알림·긴급 연락까지 꺼지는 것으로 오해한다.
+- 정지 버튼 예: "이상행동 알림 30분 멈추기" / 안내 문구 예: "이상행동 알림만 멈춥니다. 도착 확인 알림과 긴급 연락은 계속 받습니다."
+- 정지 중 상태 예: "이상행동 알림 일시정지 중 (오후 3:20까지)"
+- **최대 시간 안내는 필요하다** — "더 멈추기"를 눌렀는데 시간이 요청한 만큼 늘지 않으면 사용자는 버튼이 고장 난 것으로 오해한다. 정지 화면(또는 시간 선택 시트)에 "이상행동 알림은 지금부터 최대 24시간까지 멈출 수 있습니다."를 상시 표기한다.
+- **상한에 걸린 경우의 피드백**: 서버는 200과 실제 적용된 `pausedUntil`을 내려주므로(에러 아님), Frontend는 요청 전 값과 응답 값을 비교해 **요청한 만큼 늘어나지 않았다면** 안내 문구를 보여준다. 예: 일부만 늘어남 → "최대 24시간까지만 멈출 수 있어 오후 3:00까지로 설정했습니다." / 전혀 늘어나지 않음 → "이미 최대 24시간까지 멈춰 있습니다. 더 늘릴 수 없습니다."
+- 이미 최대치에 가까우면 "더 멈추기" 버튼은 **비활성화하지 않아도 된다**(눌러도 안전하게 무변화 200). 다만 위 안내 문구로 이유를 알려준다.
+- 서버는 `REPORT_ONLY`(리포트로만 확인)와 정지를 구분해 내려주므로, 화면에서도 두 상태를 다른 표현으로 보여준다.
+
+| Method | URI | 권한 | 설명 |
+|---|---|---|---|
+| GET | `/api/guardian/care-targets/{id}/notification-settings` | Guardian | 내 이상행동 알림 설정 조회 |
+| PUT | `/api/guardian/care-targets/{id}/notification-settings` | Guardian | 설정 **전체 교체**(모드 + 승격 분 2종) |
+| POST | `/api/guardian/care-targets/{id}/notification-settings/pause` | Guardian | 이상행동 알림 일시정지 |
+| POST | `/api/guardian/care-targets/{id}/notification-settings/resume` | Guardian | 즉시 재개 |
+
+`{id}` = 대상 CareTarget(User)의 `public_id`(§3.1과 동일). 설정은 **호출자 본인의 `GuardianTarget` 행**에 저장된다 — PRIMARY가 SUB의 설정을 대신 바꿀 수 없고(요청에 `guardianId`를 받지 않는다), PRIMARY/SUB 사이에 권한 차이는 없다(각자 자기 설정만 다룬다).
+
+**응답 (4개 엔드포인트 공통)** — 정지는 모드 값이 아니라 **오버레이**(`paused`/`pausedUntil`)로 표현한다.
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `notificationMode` | string | `REALTIME` / `REPORT_ONLY` / `HYBRID`. **`PAUSED`는 이 필드에 나오지 않는다.** 정지 중이면 "정지가 풀린 뒤 돌아갈 기본 모드"를 내려준다 |
+| `escalateMinutesArrival` | integer, nullable | `ARRIVAL_DELAY` 감지 후 이 분을 넘기면 즉시 알림으로 승격. `null` = 승격 안 함(항상 리포트로만) |
+| `escalateMinutesStay` | integer, nullable | `UNREGISTERED_STAY`용, 의미 동일 |
+| `paused` | boolean | 정지 중 여부 |
+| `pausedUntil` | string(ISO-8601 Instant), nullable | 정지 자동 해제 예정 시각. `paused=false`면 `null` |
+
+**PUT 요청**
+
+| 필드 | 타입 | 필수 | 설명 |
+|---|---|---|---|
+| `notificationMode` | string | **필수** | `REALTIME` / `REPORT_ONLY` / `HYBRID`. `PAUSED`나 그 밖의 값은 `COMMON_002`(정지는 기간이 필요한 액션이라 `pause`로만 진입) |
+| `escalateMinutesArrival` | integer/null | **키 필수** | 1~1440. 명시적 `null` = "승격 안 함". **키를 아예 빠뜨리면 `COMMON_002`** |
+| `escalateMinutesStay` | integer/null | **키 필수** | 위와 동일 |
+
+- **왜 키 누락을 거부하는가**: `null`이 "승격 안 함"이라는 의미를 가지므로, 클라이언트 실수로 키가 빠진 요청이 조용히 승격을 꺼버리면 안전 기능이 의도치 않게 꺼진다. 그래서 "키가 없음"(오류)과 "명시적 null"(의도)을 구분한다.
+- **전체 교체**: 세 값을 항상 함께 보낸다(부분 수정 없음). 그래서 `REPORT_ONLY` → `HYBRID`로 되돌릴 때도 클라이언트가 분 값을 다시 명시하게 되어 "조용한 null"이 생기지 않는다.
+- `REPORT_ONLY`에서 보낸 분 값은 거부·무시하지 않고 **보낸 그대로 저장**한다. 스케줄러가 `REALTIME`/`HYBRID`만 승격 대상으로 보므로 무해하고, `NULL` = "승격 안 함" 규칙(§15.2)은 `REALTIME`/`HYBRID`에서만 의미가 있다.
+- **정지 중 PUT**: 정지를 해제하지 않는다. `notificationMode`는 "정지가 풀린 뒤 돌아갈 기본 모드"를 바꾸고(내부적으로 `previous_notification_mode` 갱신), 분 값은 즉시 저장된다. 응답의 `paused`/`pausedUntil`은 그대로다.
+- 분 값이 정수가 아니거나(`"abc"` 등) 본문이 올바른 JSON이 아니어도 `COMMON_002`(400)다(500이 아님).
+
+**pause 요청**: `{ "durationMinutes": 30 }`
+
+| 필드 | 타입 | 필수 | 설명 |
+|---|---|---|---|
+| `durationMinutes` | integer | **필수** | **1~1440**(1분~24시간). 범위 밖·누락·비정수는 `COMMON_002`. **무기한 정지는 지원하지 않는다**(안전 서비스에서 "잊고 계속 꺼둔" 상태를 막기 위해) |
+
+- **`pausedUntil = min( max(기존 pausedUntil, 현재 시각) + durationMinutes, 현재 시각 + 1440분 )`** — 누를 때마다 시간이 늘어나는 **누적 방식**이되, **정지 남은 시간은 지금부터 24시간을 넘지 못한다.** 정지 중이 아니면(또는 기존 `pausedUntil`이 이미 지난 경우) 현재 시각이 기준이다. 서버가 계산하며 클라이언트 시각은 신뢰하지 않는다.
+  - 예(상한 미적용): 정지 중이고 `pausedUntil`이 15:20일 때 15:00에 `30`을 보내면 15:50이 된다(기존 남은 20분 + 30분).
+  - 예(24시간 근접): 15:00에 `pausedUntil`이 다음 날 14:30인 상태에서 `60`을 보내면 다음 날 **15:00**이 된다(요청은 60분이지만 상한에 걸려 30분만 늘어남).
+  - 예(이미 최대): `pausedUntil`이 이미 "지금부터 24시간"이면 `30`을 보내도 **더 늘어나지 않는다**(값 그대로, 에러 아님).
+- **24시간에 도달하면 더 이상 늘어나지 않는다.** 상한에 걸려 잘리거나 전혀 늘어나지 않아도 **200으로 응답**하고 실제 적용된 `pausedUntil`을 내려준다(별도 에러 코드 없음).
+- **상한의 정확한 의미**: 상한은 "지금부터 24시간"이라 시간이 지나면 함께 이동한다(최대치에서 10분 뒤 다시 누르면 10분 늘어난다). 즉 **정지의 남은 시간이 항상 24시간 이하**임을 보장하는 것이지, 정지 시작 후 연속 정지 총 길이가 24시간 이하임을 보장하는 것은 아니다. 사용자가 계속 눌러야만 이어지고, 누르지 않으면 최대 24시간 안에 자동 복귀한다.
+- **정지 중이 아니었다면** 이 시점의 기본 모드가 "정지가 풀린 뒤 돌아갈 모드"로 저장된다. **이미 정지 중이면 돌아갈 모드는 건드리지 않고 `pausedUntil`만 늘린다**(이미 정지 중인 상태를 "돌아갈 모드"로 저장하면 안 되므로).
+- `durationMinutes`의 상한(1440분)은 **요청 1회당** 상한이고, 누적 연장의 총합은 위 계산식의 `현재 시각 + 1440분`으로 제한된다.
+- 정지 시간이 지나면 `AnomalyScheduler`가 자동으로 기본 모드로 복귀시킨다(§15.3, 매 tick 확인 — 정지 해제 시각과 실제 복귀 사이에 최대 스케줄러 주기만큼 지연이 있을 수 있다).
+
+> **Frontend 필수 주의 — pause 버튼 더블탭 방지**: pause 요청이 진행되는 동안 버튼을 **반드시 비활성화**해야 한다. 서버는 누적 방식이라 같은 요청이 두 번 도착하면 두 번 연장된다(예: 30분 버튼을 더블탭하면 60분 정지). **Backend만으로는 "실수로 중복된 클릭"과 "의도적으로 한 번 더 연장하려는 요청"을 구분할 수 없다** — 두 경우 모두 동일한 `durationMinutes`를 가진 정상 요청이기 때문이다(요청을 식별하는 값이 없고, 시간 창 기반 중복 제거는 의도적 연장을 막게 된다). 응답의 `pausedUntil`을 화면에 바로 반영해 사용자가 실제 적용된 시각을 확인할 수 있게 한다(24시간 상한에 걸리면 요청한 만큼 늘어나지 않을 수 있다). 더블탭으로 두 번 도착해도 결과는 `현재 시각 + 24시간`을 넘지 않는다.
+
+**resume**: 본문 없음. 정지 중이면 기본 모드로 즉시 복귀하고 `pausedUntil`을 비운다. **정지 중이 아니어도 에러가 아니라 200(no-op)으로 현재 설정을 그대로 반환한다** — 더블탭, 재시도, 스케줄러 자동 복귀와의 경합에서 사용자에게 오류를 보이지 않기 위해서다.
+
+**검증·권한 순서**: ① `@Valid` 본문 검증(`COMMON_002`, Controller 진입 시점) → ② 인증 → ③ `/api/guardian/**` Guardian Role(`GUARDIAN_001`) → ④ CareTarget 없음 `TARGET_001`(404) → ⑤ 호출자와 **ACTIVE 관계가 아니면** `TARGET_002`(403, PENDING/TERMINATED 제외) → 저장. 쓰기(PUT/pause/resume)는 행 단위 비관적 락으로 처리한다(동시 요청 및 스케줄러 자동 복귀와의 경합에서 갱신 유실 방지, DATABASE_DESIGN_GUIDE.md §15.8).
+
+관계가 해제(`TERMINATED`)되었다가 다시 연결되면 새 `GuardianTarget` 행이 생성되므로 설정은 기본값(`HYBRID`, 30분/60분)으로 초기화된다.
+
+성공 코드: `TARGET_011`(조회) / `TARGET_012`(수정) / `TARGET_013`(정지) / `TARGET_014`(재개) · 주요 실패 코드: `TARGET_001`(404), `TARGET_002`(403), `COMMON_002`(400, 모드/분/기간 값 오류·키 누락·잘못된 JSON). **새 에러 코드는 만들지 않는다.**
+
 ---
 
 ## 4. 보호대상자(CareTarget) API
@@ -598,3 +671,21 @@ CONNECT 단계에서 인증, SUBSCRIBE 단계에서 리소스 소유권을 검�
   - 예정 시각/체류 시작 시각은 역산하지 않고 `AnomalyEvent` 스냅샷 컬럼(`scheduled_at`, `stay_started_at`)으로 저장한다.
   - "과거 비슷한 위치" 질문의 조회 원본은 과거 `UNREGISTERED_STAY` 이벤트뿐이다.
   - Audit Log는 이번 범위에 포함하지 않는다(위치 노출 API 전체 공통 도입 로드맵).
+
+### 7.4 알림 설정 API — 별도 리소스 + PUT + 오버레이 (확정, 2026-09-21)
+
+§4.4 로드맵의 알림 설정 API(§3.10)를 아래처럼 확정했다.
+
+| 결정 | 내용 | 근거 |
+|---|---|---|
+| 리소스 분리 | 기존 `PUT /api/guardian/care-targets/{id}`(관계 relation/alias, `TARGET_008`)에 얹지 않고 `.../notification-settings`로 분리 | relation/alias는 부작용 없는 표시 라벨, 알림 설정은 안전 관련 동작을 바꾼다. `CareTargetResponse`(목록/상세/수정 공용)를 오염시키지 않는다 |
+| 조회 | 상세 응답에 넣지 않고 별도 GET | 설정 화면이 독립적으로 진입하고 목록·상세 응답에 필드를 늘리지 않는다 |
+| 메서드 | PATCH가 아니라 **PUT 전체 교체** | 프로젝트의 갱신 API는 전부 PUT. `null`("승격 안 함")과 "필드 없음"을 구분해야 하는 부분 수정(PATCH)을 피한다 |
+| 정지 표현 | `PAUSED`를 모드 값으로 노출하지 않고 `paused`/`pausedUntil` **오버레이** | 정지 중 분 슬라이더만 고쳐 저장했을 때 정지가 조용히 해제되는 모호함을 없앤다. DB는 §15.3 그대로 저장 |
+| 재정지 | `min( max(기존 pausedUntil, now) + durationMinutes, now + 1440분 )` **누적 + 총합 상한** | 요청 1회당 1~1440분, 남은 시간은 항상 "지금부터 24시간" 이하. 더블탭 방지는 Frontend 책임(§3.10) |
+| 무기한 정지 | 미지원 | 안전 서비스에서 "잊고 계속 꺼둔" 상태 방지(눌러야만 이어지고 안 누르면 24시간 안에 자동 복귀), `paused_until`이 NULL이면 자동 복귀도 안 된다 |
+| 승격 분 | 1~1440, 키 누락은 `COMMON_002`, 명시적 `null`만 "승격 안 함" | 클라이언트 실수로 승격이 조용히 꺼지는 것 방지 |
+| 동시성 | 행 단위 비관적 락(사용자 쓰기 + 스케줄러 자동 복귀) | DATABASE_DESIGN_GUIDE.md §15.8 |
+| 적용 범위 | **이상행동 알림에만**. GeoFence 도착 알림·EMERGENCY는 영향 없음 | 화면 문구는 "이상행동 알림 멈추기"(§3.10) |
+| 에러 코드 | 신규 에러 코드 없음(`TARGET_001`/`TARGET_002`/`COMMON_002` 재사용), 성공 `TARGET_011`~`TARGET_014` | API_Response_Rule.md |
+| DDL 변경 | 이번 범위에서 보류(분 양수 CHECK, `@Version`) | DATABASE_DESIGN_GUIDE.md §15.5 |

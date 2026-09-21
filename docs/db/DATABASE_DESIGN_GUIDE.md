@@ -734,7 +734,7 @@ AnomalyEvent에 대한 것인지" 추적할 방법이 없었다).
   Box로 후보를 좁힌 뒤 `GeoDistanceCalculator`(Haversine, GeoFenceService가 이미 쓰는 유틸)로 재계산하는
   근사 방식을 쓴다 — 기존 Place 중복 판정(`PlaceService.isDuplicate`)과 동일한 절충이다.
 
-### 15.3 GuardianTarget 컬럼 추가 — 알림 모드 5종
+### 15.3 GuardianTarget 컬럼 추가 — 알림 모드 4종
 
 `notification_mode`(`REALTIME`/`REPORT_ONLY`/`HYBRID`/`PAUSED`, 기본 `HYBRID`),
 `escalate_minutes_arrival`(기본 30), `escalate_minutes_stay`(기본 60, 둘 다 nullable — **NULL이면 해당
@@ -750,6 +750,7 @@ AnomalyEvent에 대한 것인지" 추적할 방법이 없었다).
   만들지 않고 기존 tick에 얹는다).
 - `previous_notification_mode`는 `PAUSED`를 값으로 가질 수 없다(CHECK) — "일시정지 직전 모드"라는 정의상
   당연하다.
+- **API 표현과 저장 규칙은 §15.8**을 따른다 — API는 `PAUSED`를 모드 값으로 노출하지 않고 `paused`/`pausedUntil` 오버레이로 표현하며, DB는 이 절 그대로(`notification_mode=PAUSED` + `previous_notification_mode` + `paused_until`) 저장한다.
 
 ### 15.4 NotificationHistory 컬럼 추가
 
@@ -761,6 +762,8 @@ AnomalyEvent에 대한 것인지" 추적할 방법이 없었다).
   실시간 알림도 가는 중복 노출을 어떻게 다룰지는 아직 결정하지 않았다 — 구현 시점에 사용자 확인 필요.
 - `AnomalyEvent`의 장기 보관 기간 정책(§7.2에 준하는 별도 기준)은 아직 정의하지 않았다 — 운영 데이터가
   쌓이기 전까지는 우선순위가 낮다고 판단해 이번 확정 범위에서 제외.
+- **(§4.4에서 보류, 향후 검토) DDL 1.4 후보**: ① `escalate_minutes_arrival`/`escalate_minutes_stay`의 양수 CHECK(`NULL OR >= 1`) — 현재는 DB에 제약이 없고 API 검증(1~1440)이 유일한 방어선이다. ② `GuardianTarget.version`(`@Version` 낙관적 락) — 현재는 행 단위 비관적 락으로 대응한다(§15.8). 두 항목 모두 스키마 변경이라 DDL 파일 버전을 올리고 이 문서와 함께 갱신해야 하므로 이번 §4.4 범위에서는 하지 않았다.
+- **(§4.4에서 확정 — 참고) 정지 누적 총량 상한**: `paused_until = min( max(기존 paused_until, now) + durationMinutes, now + 1440분 )`. 정지 남은 시간은 어떤 순간에도 "지금부터 24시간"을 넘지 못한다(상세와 예시는 §15.8). 이 상한은 남은 시간의 상한이며 연속 정지 총 길이의 상한은 아니다.
 
 ### 15.6 AnomalyScheduler 구현 확정 (2026-09-16, §4.2)
 
@@ -876,5 +879,46 @@ AnomalyEvent에 대한 것인지" 추적할 방법이 없었다).
   `anomaly.unregistered-stay-radius-meters`(기본 50m, "같은 곳에 머무름" 판정 반경과 동일 기준) 이내인 것. 위경도 범위(Bounding
   Box)로 후보를 좁힌 뒤 `GeoDistanceCalculator`(Haversine)로 재계산한다(§15.2의 PostGIS 미사용 근사 방식과 동일).
 - 조회 기간은 최근 90일(목록 API의 최대 조회 범위와 동일)이고, 자기 자신은 제외한다.
-- 질문 문구의 "10분"은 고정 문구다. `anomaly.unregistered-stay-detect-minutes` 설정값을 바꾸면 문구와 실제 기준이 어긋날 수
-  있다(현재 기본값 10분과 일치).
+- 질문 문구의 "N분"은 고정 문구가 아니다. `anomaly.unregistered-stay-detect-minutes` 설정값(기본 10분)을 카탈로그 조회 시점에 채워 내려주므로 답변 문장의 "N분 이상"과 항상 같은 값이다(API_Specification.md §3.9).
+
+### 15.8 알림 설정 API 구현 확정 (2026-09-21, §4.4)
+
+`GET/PUT/pause/resume`(API_Specification.md §3.10) 구현 전에 §15.3에 없던 아래 사항을 확정했다.
+
+**저장 규칙 — 상태별 동작** (`notification_mode`/`previous_notification_mode`/`paused_until`)
+
+| 동작 | 정지 아님 | 정지 중(`notification_mode=PAUSED`) |
+|---|---|---|
+| PUT(기본 모드 X) | `notification_mode ← X` | **`previous_notification_mode ← X`**(`PAUSED`/`paused_until` 유지 — 정지를 해제하지 않는다) |
+| PUT(분 값) | `escalate_minutes_*` 갱신 | 동일 |
+| pause(`d`분, 1≤`d`≤1440) | `previous_notification_mode ← 현재 모드`, `notification_mode ← PAUSED`, `paused_until ← min(now + d, now + 1440분)` (= `now + d`, `d`가 1440 이하라 상한에 걸리지 않음) | `previous_notification_mode`는 **건드리지 않고** `paused_until ← min( max(기존 paused_until, now) + d, now + 1440분 )` |
+| resume | 변경 없음(200 no-op) | `notification_mode ← previous_notification_mode`(NULL이면 `HYBRID`), `previous_notification_mode ← NULL`, `paused_until ← NULL` |
+| 자동 복귀(`AnomalyScheduler`) | 해당 없음 | resume과 동일한 전이. `paused_until` 경과 시 |
+
+**정지 시간 계산식 (확정)** — 누를 때마다 시간이 늘어나되, **정지 남은 시간은 어떤 순간에도 "지금부터 24시간"을 넘지 못한다.**
+
+```
+paused_until = min( max(기존 paused_until, now) + d , now + 1440분 )
+```
+
+- `max(기존 paused_until, now)`: 정지 중이 아니거나(기존 값 없음) 기존 값이 이미 지났으면 `now`가 기준이다. 정지 중이면 남은 시간 위에 더한다(누적).
+- `now + 1440분`: **총합 상한.** `d` 자체도 요청 1회당 1~1440분으로 제한된다.
+- 24시간 상한에 걸려 잘려도 에러가 아니라 200으로 응답하며, 실제 적용된 `paused_until`을 그대로 내려준다.
+
+| 시나리오 | `now` | 기존 `paused_until` | `d` | 후보(`max+d`) | 상한(`now+24h`) | 결과 |
+|---|---|---|---|---|---|---|
+| 정지 중 연장(기존 예시) | 15:00 | 15:20 | 30 | 15:50 | 다음 날 15:00 | **15:50** (상한 미적용, 기존 남은 20분 + 30분) |
+| 정지 아님 → 새로 정지 | 15:00 | 없음 | 60 | 16:00 | 다음 날 15:00 | **16:00** |
+| 24시간 근접 | 15:00 | 다음 날 14:30 | 60 | 다음 날 15:30 | 다음 날 15:00 | **다음 날 15:00** (요청은 60분이지만 30분만 늘어남) |
+| 이미 최대 | 15:00 | 다음 날 15:00 | 30 | 다음 날 15:30 | 다음 날 15:00 | **다음 날 15:00** (변화 없음) |
+| 최대 도달 10분 뒤 재요청 | 15:10 | 다음 날 15:00 | 30 | 다음 날 15:30 | 다음 날 15:10 | **다음 날 15:10** (상한이 시간과 함께 이동해 10분 늘어남) |
+
+- **상한의 의미(중요)**: 상한은 "지금부터 24시간"이라 시간이 지나면 함께 뒤로 이동한다. 따라서 이 규칙이 보장하는 것은 **"정지의 남은 시간이 항상 24시간 이하"**이지 "정지를 시작한 뒤 연속 정지 총 길이가 24시간 이하"가 아니다. 사용자가 주기적으로 계속 누르면 정지를 이어갈 수는 있다. 그러나 매번 사용자의 명시적 조작이 필요하고, **누르지 않으면 최대 24시간 안에 반드시 자동 복귀**한다 — 이 상한의 목적("잊고 계속 꺼둔" 상태 방지)은 그대로 충족된다.
+
+- **API 오버레이**: 응답의 `notificationMode`는 항상 기본 모드 3종이다(정지 중이면 `previous_notification_mode`를 내려준다). 정지 중에 PUT이 `notification_mode`를 바꾸면 정지가 조용히 해제되므로 위 표처럼 `previous_notification_mode`를 갱신한다.
+- **불변식은 엔티티가 소유한다**: "이미 정지 중이면 `previous_notification_mode`를 덮어쓰지 않는다"(`ck_gt_prev_notification_mode` 위반 방지)와 "복귀할 모드가 없으면 `HYBRID`로 폴백한다"(`notification_mode` NOT NULL 위반 방지)는 Service 분기가 아니라 엔티티 메서드(`pause()`/`resumeFromPause()`) 안에서 보장한다. DB CHECK는 최후 방어선이며 위반 시 500이 되므로 애플리케이션이 먼저 막아야 한다.
+- **정지의 의미**: `paused_until`은 항상 서버가 `now` 기준으로 계산하며(위 계산식), 무기한 정지는 만들지 않는다 — 남은 정지 시간은 항상 `now + 24시간` 이하다. 기존 데이터 방어로, `PAUSED`인데 `paused_until`이 NULL이면 `isPauseDue`가 false라 자동 복귀하지 않으며 사용자가 resume으로 해제할 수 있다.
+- **적용 범위**: `notification_mode`를 읽는 곳은 `AnomalyScheduler`의 승격 판단뿐이다. 정지·`REPORT_ONLY`는 **이상행동 승격 알림에만** 영향을 주며 GeoFence 도착 확인 알림과 긴급 연락(`EMERGENCY_*`)은 어떤 모드에서도 억제하지 않는다.
+- **동시성 — 행 단위 비관적 락**: 사용자 쓰기(PUT/pause/resume)와 스케줄러 자동 복귀가 같은 `GuardianTarget` 행을 동시에 갱신하면 갱신 유실이 생긴다(예: 사용자가 정지를 연장하는 순간 스케줄러가 복귀시켜 연장이 사라짐, 또는 스케줄러가 오래된 값으로 덮어씀). 두 경로 모두 기존 `GuardianTargetRepository.findActiveByGuardianIdAndTargetIdForUpdate`(PRIMARY 위임, §7에서 쓰는 방식) 패턴으로 행을 잠근 뒤 상태를 다시 확인한다 — 스케줄러는 잠금 후 `isPauseDue`를 재확인한다. database.md의 "비관적 락은 원칙적으로 사용하지 않는다"에 대한 국소 예외이며, 단일 행·짧은 트랜잭션이고 같은 테이블에 이미 선례가 있다. `@Version` 낙관적 락은 DDL 변경이 필요해 §15.5로 보류했다.
+- **검증**: `escalate_minutes_*`는 1~1440(정수), 명시적 `null`만 "승격 안 함", 키 누락은 거부한다. DDL에는 이를 강제하는 CHECK가 없어(§15.5) API 검증이 유일한 방어선이다.
+- **관계 해제 시**: `GuardianTarget`이 `TERMINATED`가 되었다가 재연결되면 새 행이 만들어져 설정은 기본값(`HYBRID`, 30/60분)으로 초기화된다.

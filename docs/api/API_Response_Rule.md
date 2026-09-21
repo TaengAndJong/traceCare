@@ -138,6 +138,10 @@
 | TARGET_008 | 관계 정보(relation/alias) 수정 성공 |
 | TARGET_009 | 관계 해제 성공 |
 | TARGET_010 | PRIMARY 위임 성공 |
+| TARGET_011 | 이상행동 알림 설정 조회 성공(`GET /api/guardian/care-targets/{id}/notification-settings`, API_Specification.md §3.10) |
+| TARGET_012 | 이상행동 알림 설정 수정 성공(`PUT` 동일 URI, 설정 전체 교체) |
+| TARGET_013 | 이상행동 알림 일시정지 성공(`POST .../notification-settings/pause`) |
+| TARGET_014 | 이상행동 알림 재개 성공(`POST .../notification-settings/resume`, 정지 중이 아니어도 200 no-op) |
 | LOCATION_001 | 위치 조회 성공 |
 | LOCATION_002 | 위치 전송 성공 |
 | PLACE_001 | 장소(안심구역) 등록/조회 성공 |
@@ -302,6 +306,8 @@ REST 관례상 HTTP Status와 Response Body의 `success`는 항상 일치해야 
 | TARGET_006 | 409 | 이미 대기 중인 동일 초대 요청이 존재함 |
 | TARGET_007 | 429 | 초대 코드 생성 요청 횟수 초과 (DATABASE_DESIGN_GUIDE.md §7, CareTarget 1인당 5회/일) — COMMON_005(AI/외부 API 보호용 Rate Limit)와 원인이 달라 별도 코드로 관리 |
 
+> **알림 설정 API(API_Specification.md §3.10)는 새 에러 코드를 만들지 않는다.** CareTarget 없음 `TARGET_001`(404), 호출자와 ACTIVE 관계 아님 `TARGET_002`(403), 모드/분/기간 값 오류·키 누락·잘못된 JSON은 `COMMON_002`(400)를 재사용한다. 성공 코드는 위 `TARGET_011`~`TARGET_014`이며, 성공/에러가 독립된 번호 공간이라(5.1절) 성공 `TARGET_007`이 비어 있어도 재사용하지 않고 `011`부터 잇는다(에러 `TARGET_007`과의 혼동 방지).
+
 #### 위치 정보 (LOCATION)
 
 | code | HTTP Status | 상황 |
@@ -462,6 +468,10 @@ public enum SuccessCode {
     TARGET_008("TARGET_008", "관계 정보(relation/alias) 수정 성공"),
     TARGET_009("TARGET_009", "관계 해제 성공"),
     TARGET_010("TARGET_010", "PRIMARY 위임 성공"),
+    TARGET_011("TARGET_011", "이상행동 알림 설정 조회 성공"),
+    TARGET_012("TARGET_012", "이상행동 알림 설정 수정 성공"),
+    TARGET_013("TARGET_013", "이상행동 알림 일시정지 성공"),
+    TARGET_014("TARGET_014", "이상행동 알림 재개 성공"),
     LOCATION_001("LOCATION_001", "위치 조회 성공"),
     LOCATION_002("LOCATION_002", "위치 전송 성공"),
     PLACE_001("PLACE_001", "장소(안심구역) 등록/조회 성공"),
