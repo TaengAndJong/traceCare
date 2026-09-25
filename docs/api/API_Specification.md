@@ -245,18 +245,53 @@ VisitHistory 기준(가공된 "방문 단위" 데이터). 원본 GPS 좌표 나�
 | Request(`/summary`, 바디) | `to` | string(ISO-8601 Instant) | 요약 기간 끝. `from`보다 이전이면 `COMMON_002` |
 | Response(`/summary`) | `answer` | string | LLM이 생성한 이동 요약 텍스트 |
 | Response(`/summary`) | `visitCount` | number | 요약의 근거가 된 방문 건수 |
+| Response(`/summary`) | `anomalyCount` | number | 요약 기간에 걸친 이상행동 총 건수(`anomalies`는 최대 20건이라 총 건수를 별도로 내린다). 없으면 `0` |
+| Response(`/summary`) | `anomalies` | array | 요약 기간에 걸친 이상행동 목록(최대 20건, 아래 항목 구성). 없으면 필드를 생략하지 않고 빈 배열 `[]` |
 | Request(`/search`, 바디) | `careTargetId` | string(UUID) | 검색 대상 CareTarget의 `public_id`(필수) |
 | Request(`/search`, 바디) | `query` | string | 자연어 검색어(최대 500자). "지난주"/"이번달" 등 러프한 시간 키워드를 인식해 조회 기간을 좁히고, 인식되는 키워드가 없으면 최근 90일을 기본 기간으로 검색한다 |
 | Response(`/search`) | `answer` | string | LLM이 생성한 답변 텍스트. 해당 기간에 일치하는 방문 기록이 없으면 에러가 아니라 "그런 기록이 없다"는 자연어 답변으로 응답한다 |
 | Request(`/report/weekly`, 바디) | `careTargetId` | string(UUID) | 리포트 대상 CareTarget의 `public_id`(필수) |
 | Response(`/report/weekly`) | `answer` | string | LLM이 생성한 주간 리포트 텍스트 |
 | Response(`/report/weekly`) | `visitCount` | number | 리포트의 근거가 된 방문 건수 |
+| Response(`/report/weekly`) | `anomalyCount`, `anomalies` | number, array | `/summary`와 동일(기간은 최근 7일) |
 
-`/summary`, `/search`, `/report/weekly` 모두 대상 CareTarget에 방문 이력이 아예 없으면(조회 기간과 무관하게) `VISIT_001`(404)을 반환하고 LLM을 호출하지 않는다.
+**`VISIT_001`(404) 규칙**
+
+- `/search`: 대상 CareTarget에 방문 이력이 **아예 없으면**(조회 기간과 무관하게) `VISIT_001`을 반환하고 LLM을 호출하지 않는다. 기간에 일치하는 기록만 없으면 에러가 아니라 자연어 답변으로 응답한다.
+- `/summary`, `/report/weekly`: **요청 기간(`/report/weekly`는 최근 7일)** 에 방문 기록과 이상행동이 모두 없을 때만 `VISIT_001`을 반환하고 LLM을 호출하지 않는다. (2026-09 정정: 이전 문서의 "방문 이력이 아예 없으면(기간 무관)"은 실제 코드 동작과 달랐다. 코드가 기간 기준으로 동작해 왔고, 근거 없는 기간을 LLM에 넘기지 않기 위해 코드 동작을 기준으로 문서를 맞췄다.)
+
+| 기간 내 방문 | 기간 내 이상행동 | 결과 |
+|---|---|---|
+| 있음 | 있음 | 200 — LLM 요약(`answer`) + `anomalies` |
+| 있음 | 없음 | 200 — LLM 요약 + `anomalyCount: 0`, `anomalies: []` |
+| 없음 | 있음 | 200 — **LLM을 호출하지 않는다.** `answer`는 고정 문장 "해당 기간의 방문 기록은 없습니다. 아래 이상행동을 확인해 주세요.", `visitCount: 0`, `anomalies` 채움 |
+| 없음 | 없음 | `VISIT_001`(404), LLM 미호출 |
+
+이상행동이 있는데 방문 기록이 없는 경우(`ARRIVAL_DELAY`는 도착 기록이 없는 상황이고 `UNREGISTERED_STAY`는 등록 장소가 아니라 `VisitHistory`가 생기지 않는다)가 오히려 정상이므로, 이때 404로 막아 이상행동을 숨기지 않는다.
+
+**`anomalies` 항목** — LLM과 무관하게 서버가 DB의 사실을 그대로 내린다(문장 생성 과정에서 시각/장소/진행 여부가 왜곡되지 않도록 §3.9 `/explain`을 고정 템플릿으로 만든 것과 같은 이유). LLM에는 이상행동 데이터를 전달하지 않고, "이상행동은 별도로 표시되므로 '이상 없음' 같은 단정적 표현을 쓰지 않는다"는 지침 한 문장만 시스템 지침에 포함한다.
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `anomalyEventId` | number | `AnomalyEvent` 내부 PK(§3.9 `/explain`의 `{anomalyEventId}`) |
+| `type` | string | `ARRIVAL_DELAY` / `UNREGISTERED_STAY` |
+| `status` | string | `ONGOING`(미해소) / `RESOLVED`(해소됨) |
+| `detectedAt` | string(ISO-8601) | 감지 시각 |
+| `resolvedAt` | string(ISO-8601), nullable | 해소 시각(`ONGOING`이면 `null`) |
+| `placeId` | string(UUID), nullable | 관련 Place의 `public_id`. Place가 삭제됐으면 `null` |
+| `placeName` | string, nullable | 관련 Place 이름. Place가 삭제됐으면 `null` |
+| `notified` | boolean | **요청한 Guardian 본인이** 이 이상행동의 승격 푸시를 실제로 받았는가(`NotificationHistory`에 `FAILED`가 아닌 기록(`SENT`/`READ`/`RESPONDED`)이 있으면 `true`, 기록이 없거나 `FAILED`뿐이면 `false`). Guardian별로 다를 수 있는 유일한 필드 |
+
+- 좌표는 내리지 않는다. 상세는 `anomalyEventId`로 §3.9 `/explain`을 호출한다.
+- **노출 범위**: 알림 모드(`REALTIME`/`HYBRID`/`REPORT_ONLY`)와 일시정지 여부와 무관하게 기간에 걸친 이상행동을 **항상 전부** 노출한다. 알림 모드는 푸시 수신 방식일 뿐 CareTarget에게 일어난 사실의 조회 범위가 아니다(`REPORT_ONLY`는 이 응답이 유일한 창구, 정지는 "방해하지 말라"이지 "숨기라"가 아니다).
+- **기간 기준(겹침)**: `detectedAt ≤ to` AND (`resolvedAt` 없음 OR `resolvedAt ≥ from`). 기간 이전에 감지돼 지금도 진행 중인 이상행동을 포함한다.
+- **정렬/상한**: `ONGOING` 우선, 그다음 `detectedAt` 내림차순으로 최대 20건. 초과 여부는 `anomalyCount`로 확인한다.
+- **중복 노출**: `HYBRID`에서 리포트에 노출된 이상행동이 나중에 승격 푸시로도 전달될 수 있다. 이는 중복이 아니라 "스냅샷"과 "임계 시간 경과"라는 서로 다른 정보이며, 승격을 억제하지 않고 `notified`로만 구분한다(DATABASE_DESIGN_GUIDE.md §15.5).
+- LLM 장애(`AI_002`/`AI_004`) 시 기존 에러 계약을 유지한다. 이상행동은 §3.9 목록 API로 별도 확인할 수 있다.
 
 `/report/weekly`는 `/summary`와 요청/응답 구조가 거의 같지만 기간을 요청자가 지정하지 않는다 — "이번 주"는 항상 요청 시점 기준 **최근 7일(rolling)**로 고정이다(문서에 정의가 없어 자체 결정, 근거는 `AiChatService` Javadoc 참고). 과거 특정 주를 조회하는 파라미터는 없으며, 온디맨드(호출 시점에 즉시 생성) 방식만 지원한다 — 정기 배치/자동 생성은 지원하지 않는다.
 
-성공 코드: `AI_001` · 주요 실패 코드: `AI_002`(500, LLM API 호출 실패), `AI_004`(429, LLM 호출 한도 초과), `TARGET_002`(403, `careTargetId` 관계 미매핑), `VISIT_001`(404, `/summary`·`/search`·`/report/weekly` 대상 방문 이력 없음), `COMMON_002`(400, `careTargetId` 누락 또는 `/summary`의 `from`이 `to`보다 이후)
+성공 코드: `AI_001` · 주요 실패 코드: `AI_002`(500, LLM API 호출 실패), `AI_004`(429, LLM 호출 한도 초과), `TARGET_002`(403, `careTargetId` 관계 미매핑), `VISIT_001`(404, `/search`는 방문 이력이 아예 없을 때, `/summary`·`/report/weekly`는 기간 내 방문과 이상행동이 모두 없을 때), `COMMON_002`(400, `careTargetId` 누락 또는 `/summary`의 `from`이 `to`보다 이후)
 
 ### 3.7 알림
 
