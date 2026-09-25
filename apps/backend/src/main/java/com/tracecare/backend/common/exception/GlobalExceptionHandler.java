@@ -9,11 +9,15 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.NoHandlerFoundException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import com.fasterxml.jackson.databind.JsonMappingException;
 
@@ -166,6 +170,38 @@ public class GlobalExceptionHandler {
         return path.length() > MAX_FIELD_PATH_LENGTH
                 ? path.substring(0, MAX_FIELD_PATH_LENGTH)
                 : path.toString();
+    }
+
+    /**
+     * 프레임워크 라우팅/협상 단계에서 거부된 요청(존재하지 않는 URI 404, 허용되지 않은 HTTP Method 405, 지원하지 않는 Content-Type
+     * 415)은 서버 결함이 아니라 예상 가능한 클라이언트 오류이므로 각각 COMMON_003/004/009로 응답한다. 이 핸들러들이 없으면 {@code
+     * Exception} 핸들러로 떨어져 500(COMMON_001)에 ERROR 로그와 스택 트레이스가 남는다(API_Response_Rule.md §5.2).
+     *
+     * <p>{@code NoResourceFoundException}은 Spring Boot 기본 설정(정적 리소스 핸들러가 {@code /**}에 매핑)에서 매핑되지 않은 URI가
+     * 던지는 예외이고, {@code NoHandlerFoundException}은 정적 리소스 매핑이 꺼진 설정에서 같은 상황에 던져지므로 둘 다 404로 묶는다.
+     *
+     * <p><b>요청 URI/Method/미디어 타입 원문을 응답 메시지와 로그에 남기지 않는다.</b> 응답은 ErrorCode의 고정 문구만 쓰고, 로그는
+     * 이벤트명과 코드만 남긴다(경로에 식별자가 섞일 수 있고, 스캐너성 요청이 로그를 오염시키지 않도록). WARN이며 스택 트레이스는 남기지
+     * 않는다(Logging_Guide.md §9.2). 인증되지 않은 요청은 이 예외보다 먼저 SecurityConfig가 401로 처리하므로 여기까지 오지 않는다.
+     */
+    @ExceptionHandler({NoResourceFoundException.class, NoHandlerFoundException.class})
+    public ResponseEntity<ApiResponse<Void>> handleNotFound() {
+        return rejectedRequest(ErrorCode.COMMON_003);
+    }
+
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMethodNotSupported() {
+        return rejectedRequest(ErrorCode.COMMON_004);
+    }
+
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMediaTypeNotSupported() {
+        return rejectedRequest(ErrorCode.COMMON_009);
+    }
+
+    private ResponseEntity<ApiResponse<Void>> rejectedRequest(ErrorCode errorCode) {
+        log.warn("event=HTTP_REQUEST_REJECTED, code={}", errorCode);
+        return ResponseEntity.status(errorCode.getHttpStatus()).body(ApiResponse.error(errorCode));
     }
 
     @ExceptionHandler(AccessDeniedCustomException.class)
