@@ -13,6 +13,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -21,11 +22,15 @@ import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Stream;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -52,8 +57,10 @@ import com.tracecare.backend.domain.visit.repository.VisitHistoryRepository;
 
 /**
  * DATABASE_DESIGN_GUIDE.md §15.6(§4.2 확정 A~D)의 3가지 책임(감지/승격/PAUSED 복귀)과 분산 락을 검증한다.
- * {@code expectedArrivalTime}/임계값 판단은 시스템 시계(§15.1 {@code ZoneId.systemDefault()})를 기준으로 하므로,
- * 자정 경계를 피하도록 넉넉한 여유(수십 분)를 두고 상대 시각을 구성한다.
+ * {@code expectedArrivalTime}/임계값 판단은 스케줄러에 주입한 {@link Clock}을 기준으로 한다. 이 테스트는 실행 시각(벽시계)을
+ * 읽지 않고 {@code Clock.fixed}로 시각을 고정한다 — 예상 도착 시각은 {@code LocalTime.now()}에서 만들지 않고 고정 시각 기준의
+ * 절대값({@link TimeCase})으로 적는다. 감지 판단이 시각에 민감한 테스트는 자정 경계(00:15/23:30/23:59)와 정오(12:00) 네 시각을
+ * 모두 돌린다(과거 KST 23시대/00시대에 {@code LocalTime.now().plusHours(1)}이 날짜를 넘어 실패하던 문제의 회귀 방지).
  */
 @ExtendWith(MockitoExtension.class)
 class AnomalySchedulerTest {
@@ -63,7 +70,8 @@ class AnomalySchedulerTest {
     private static final long LOCK_TTL_MINUTES = 4;
     private static final Long CARE_TARGET_ID = 1L;
     private static final Long PLACE_ID = 10L;
-    private static final ZoneId ZONE = ZoneId.systemDefault();
+    private static final ZoneId ZONE = ZoneId.of("Asia/Seoul");
+    private static final LocalDate TEST_DATE = LocalDate.of(2026, 9, 23);
 
     @Mock private PlaceArrivalScheduleRepository placeArrivalScheduleRepository;
     @Mock private AnomalyEventRepository anomalyEventRepository;
@@ -77,6 +85,32 @@ class AnomalySchedulerTest {
 
     private final CacheKeyGenerator cacheKeyGenerator = new CacheKeyGenerator();
 
+    /** 기본 고정 시각은 정오(자정 경계와 무관한 테스트용). 시각에 민감한 테스트는 {@link #clockAt}으로 교체한다. */
+    private Clock clock = clockAt(LocalTime.NOON);
+
+    private static Clock clockAt(LocalTime time) {
+        return Clock.fixed(TEST_DATE.atTime(time).atZone(ZONE).toInstant(), ZONE);
+    }
+
+    /**
+     * 고정 시각과, 그 시각 기준 "같은 날 안에서" 마감이 이미 지난 예상 도착 시각({@code past}) / 아직 지나지 않은 예상 도착
+     * 시각({@code future}). 마감 = 예상 시각 + {@value #DETECT_MINUTES}분이며, 날짜를 넘기지 않도록 시각마다 값을 직접 정한다.
+     */
+    private record TimeCase(LocalTime now, LocalTime past, LocalTime future) {
+        @Override
+        public String toString() {
+            return "now=" + now;
+        }
+    }
+
+    static Stream<Arguments> clockTimes() {
+        return Stream.of(
+                Arguments.of(new TimeCase(LocalTime.of(12, 0), LocalTime.of(11, 30), LocalTime.of(13, 0))),
+                Arguments.of(new TimeCase(LocalTime.of(0, 15), LocalTime.of(0, 0), LocalTime.of(1, 15))),
+                Arguments.of(new TimeCase(LocalTime.of(23, 30), LocalTime.of(23, 0), LocalTime.of(23, 45))),
+                Arguments.of(new TimeCase(LocalTime.of(23, 59), LocalTime.of(23, 30), LocalTime.of(23, 55))));
+    }
+
     private AnomalyScheduler scheduler() {
         return new AnomalyScheduler(
                 placeArrivalScheduleRepository,
@@ -88,6 +122,7 @@ class AnomalySchedulerTest {
                 notificationDispatchService,
                 redisTemplate,
                 cacheKeyGenerator,
+                clock,
                 DETECT_MINUTES,
                 PAGE_SIZE,
                 LOCK_TTL_MINUTES);
@@ -169,11 +204,13 @@ class AnomalySchedulerTest {
     // 역할1: ARRIVAL_DELAY 감지
     // ---------------------------------------------------------------------
 
-    @Test
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("clockTimes")
     @DisplayName("예상 도착 시각+감지기준(10분)이 아직 지나지 않았으면 AnomalyEvent를 생성하지 않는다")
-    void detectArrivalDelay_deadlineNotYetReached_doesNotCreateEvent() {
-        // given — 예상 도착 시각이 1시간 뒤(아직 지각 판단 자체가 불가능한 시점)
-        ScheduledPlace scheduled = scheduledPlace(LocalTime.now(ZONE).plusHours(1));
+    void detectArrivalDelay_deadlineNotYetReached_doesNotCreateEvent(TimeCase t) {
+        // given — 마감이 아직 지나지 않은 예상 도착 시각(같은 날 안)
+        clock = clockAt(t.now());
+        ScheduledPlace scheduled = scheduledPlace(t.future());
         when(placeArrivalScheduleRepository.findScheduledByDayOfWeek(anyInt(), any()))
                 .thenReturn(new PageImpl<>(List.of(scheduled)));
         when(visitHistoryRepository.existsByUserIdAndPlaceIdAndArrivalTimeGreaterThanEqual(
@@ -187,12 +224,13 @@ class AnomalySchedulerTest {
         verify(anomalyEventRepository, never()).save(any());
     }
 
-    @Test
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("clockTimes")
     @DisplayName("예상 도착 시각+감지기준을 넘겼고 도착 기록이 없으면 AnomalyEvent(ARRIVAL_DELAY)를 생성한다")
-    void detectArrivalDelay_deadlinePassedAndNotArrived_createsAnomalyEvent() {
-        // given — 예상 도착 시각이 30분 전(10분 감지기준을 이미 넘김)
-        LocalTime expectedTime = LocalTime.now(ZONE).minusMinutes(30);
-        ScheduledPlace scheduled = scheduledPlace(expectedTime);
+    void detectArrivalDelay_deadlinePassedAndNotArrived_createsAnomalyEvent(TimeCase t) {
+        // given — 마감(예상+10분)이 이미 지난 예상 도착 시각(같은 날 안)
+        clock = clockAt(t.now());
+        ScheduledPlace scheduled = scheduledPlace(t.past());
         when(placeArrivalScheduleRepository.findScheduledByDayOfWeek(anyInt(), any()))
                 .thenReturn(new PageImpl<>(List.of(scheduled)));
         when(visitHistoryRepository.existsByUserIdAndPlaceIdAndArrivalTimeGreaterThanEqual(
@@ -212,11 +250,13 @@ class AnomalySchedulerTest {
         assertThat(captor.getValue().getPlaceId()).isEqualTo(PLACE_ID);
     }
 
-    @Test
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("clockTimes")
     @DisplayName("ARRIVAL_DELAY 생성 시 scheduled_at(예정 도착 시각)만 채우고 stay_started_at은 비워 둔다")
-    void detectArrivalDelay_created_fillsScheduledAtSnapshotOnly() {
+    void detectArrivalDelay_created_fillsScheduledAtSnapshotOnly(TimeCase t) {
         // given
-        LocalTime expectedTime = LocalTime.now(ZONE).minusMinutes(30);
+        clock = clockAt(t.now());
+        LocalTime expectedTime = t.past();
         ScheduledPlace scheduled = scheduledPlace(expectedTime);
         when(placeArrivalScheduleRepository.findScheduledByDayOfWeek(anyInt(), any()))
                 .thenReturn(new PageImpl<>(List.of(scheduled)));
@@ -232,18 +272,20 @@ class AnomalySchedulerTest {
         // then — scheduled_at은 "오늘 예정 도착 시각"이고 detected_at은 그로부터 감지 기준(분) 뒤다
         ArgumentCaptor<AnomalyEvent> captor = ArgumentCaptor.forClass(AnomalyEvent.class);
         verify(anomalyEventRepository).save(captor.capture());
-        Instant expectedAt = LocalDate.now(ZONE).atTime(expectedTime).atZone(ZONE).toInstant();
+        Instant expectedAt = TEST_DATE.atTime(expectedTime).atZone(ZONE).toInstant();
         assertThat(captor.getValue().getScheduledAt()).isEqualTo(expectedAt);
         assertThat(captor.getValue().getDetectedAt())
                 .isEqualTo(expectedAt.plus(DETECT_MINUTES, ChronoUnit.MINUTES));
         assertThat(captor.getValue().getStayStartedAt()).isNull();
     }
 
-    @Test
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("clockTimes")
     @DisplayName("이미 열린 ARRIVAL_DELAY 이벤트가 있으면 같은 스케줄에 대해 다시 생성하지 않는다")
-    void detectArrivalDelay_alreadyOpenEvent_doesNotCreateDuplicate() {
+    void detectArrivalDelay_alreadyOpenEvent_doesNotCreateDuplicate(TimeCase t) {
         // given
-        ScheduledPlace scheduled = scheduledPlace(LocalTime.now(ZONE).minusMinutes(30));
+        clock = clockAt(t.now());
+        ScheduledPlace scheduled = scheduledPlace(t.past());
         when(placeArrivalScheduleRepository.findScheduledByDayOfWeek(anyInt(), any()))
                 .thenReturn(new PageImpl<>(List.of(scheduled)));
         when(visitHistoryRepository.existsByUserIdAndPlaceIdAndArrivalTimeGreaterThanEqual(
@@ -253,8 +295,8 @@ class AnomalySchedulerTest {
                 AnomalyEvent.createArrivalDelay(
                         CARE_TARGET_ID,
                         PLACE_ID,
-                        Instant.now().minus(20, ChronoUnit.MINUTES),
-                        Instant.now().minus(30, ChronoUnit.MINUTES));
+                        clock.instant().minus(20, ChronoUnit.MINUTES),
+                        clock.instant().minus(30, ChronoUnit.MINUTES));
         when(anomalyEventRepository.findOpenArrivalDelay(CARE_TARGET_ID, PLACE_ID))
                 .thenReturn(Optional.of(existing));
 
@@ -265,11 +307,13 @@ class AnomalySchedulerTest {
         verify(anomalyEventRepository, never()).save(any());
     }
 
-    @Test
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("clockTimes")
     @DisplayName("오늘 이미 도착한 기록이 있으면 열려 있던 ARRIVAL_DELAY 이벤트를 해제한다")
-    void detectArrivalDelay_arrivedToday_resolvesOpenEvent() {
+    void detectArrivalDelay_arrivedToday_resolvesOpenEvent(TimeCase t) {
         // given
-        ScheduledPlace scheduled = scheduledPlace(LocalTime.now(ZONE).minusMinutes(30));
+        clock = clockAt(t.now());
+        ScheduledPlace scheduled = scheduledPlace(t.past());
         when(placeArrivalScheduleRepository.findScheduledByDayOfWeek(anyInt(), any()))
                 .thenReturn(new PageImpl<>(List.of(scheduled)));
         when(visitHistoryRepository.existsByUserIdAndPlaceIdAndArrivalTimeGreaterThanEqual(
@@ -279,8 +323,8 @@ class AnomalySchedulerTest {
                 AnomalyEvent.createArrivalDelay(
                         CARE_TARGET_ID,
                         PLACE_ID,
-                        Instant.now().minus(20, ChronoUnit.MINUTES),
-                        Instant.now().minus(30, ChronoUnit.MINUTES));
+                        clock.instant().minus(20, ChronoUnit.MINUTES),
+                        clock.instant().minus(30, ChronoUnit.MINUTES));
         when(anomalyEventRepository.findOpenArrivalDelay(CARE_TARGET_ID, PLACE_ID))
                 .thenReturn(Optional.of(existing));
 
@@ -292,13 +336,15 @@ class AnomalySchedulerTest {
         verify(anomalyEventRepository).save(existing);
     }
 
-    @Test
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("clockTimes")
     @DisplayName("청크 경계 — 여러 페이지에 걸친 스케줄을 전부 처리한다(hasNext 반복)")
-    void detectArrivalDelay_pagingAcrossChunks_processesAllPages() {
+    void detectArrivalDelay_pagingAcrossChunks_processesAllPages(TimeCase t) {
         // given — 페이지 크기 2, 총 3건(page0=2건, page1=1건)
-        ScheduledPlace a = scheduledPlace(LocalTime.now(ZONE).minusMinutes(30));
-        ScheduledPlace b = scheduledPlace(LocalTime.now(ZONE).minusMinutes(30));
-        ScheduledPlace c = scheduledPlace(LocalTime.now(ZONE).minusMinutes(30));
+        clock = clockAt(t.now());
+        ScheduledPlace a = scheduledPlace(t.past());
+        ScheduledPlace b = scheduledPlace(t.past());
+        ScheduledPlace c = scheduledPlace(t.past());
         // argThat 람다는 Mockito가 기존 스텁(@BeforeEach의 any() 기본값)과의 매칭을 판단하는 과정에서
         // null을 인자로 한 번 미리 호출해볼 수 있어 null-safe하게 작성한다(그렇지 않으면 스텁 등록 자체에서 NPE).
         when(placeArrivalScheduleRepository.findScheduledByDayOfWeek(
@@ -349,7 +395,7 @@ class AnomalySchedulerTest {
     @DisplayName("감지 후 escalate_minutes_arrival이 아직 안 지났으면 승격 알림을 보내지 않는다")
     void escalate_belowThreshold_doesNotDispatch() {
         // given — 5분 전 감지, escalate 기준 30분(아직 25분 남음)
-        AnomalyEvent event = openArrivalDelayEvent(Instant.now().minus(5, ChronoUnit.MINUTES));
+        AnomalyEvent event = openArrivalDelayEvent(clock.instant().minus(5, ChronoUnit.MINUTES));
         when(anomalyEventRepository.findByResolvedAtIsNull()).thenReturn(List.of(event));
         GuardianTarget guardian =
                 activeGuardian(1L, 11L, GuardianTarget.NOTIFICATION_MODE_HYBRID, 30);
@@ -368,7 +414,7 @@ class AnomalySchedulerTest {
     @DisplayName("escalate_minutes_arrival이 NULL이면 아무리 시간이 지나도 절대 승격되지 않는다")
     void escalate_nullEscalateMinutes_neverEscalates() {
         // given
-        AnomalyEvent event = openArrivalDelayEvent(Instant.now().minus(6, ChronoUnit.HOURS));
+        AnomalyEvent event = openArrivalDelayEvent(clock.instant().minus(6, ChronoUnit.HOURS));
         when(anomalyEventRepository.findByResolvedAtIsNull()).thenReturn(List.of(event));
         GuardianTarget guardian =
                 activeGuardian(1L, 11L, GuardianTarget.NOTIFICATION_MODE_HYBRID, null);
@@ -388,7 +434,7 @@ class AnomalySchedulerTest {
     @DisplayName("이미 이 Guardian에게 통지된 이벤트는 다시 승격 발송하지 않는다")
     void escalate_alreadyNotifiedGuardian_doesNotDispatchAgain() {
         // given
-        AnomalyEvent event = openArrivalDelayEvent(Instant.now().minus(20, ChronoUnit.MINUTES));
+        AnomalyEvent event = openArrivalDelayEvent(clock.instant().minus(20, ChronoUnit.MINUTES));
         when(anomalyEventRepository.findByResolvedAtIsNull()).thenReturn(List.of(event));
         GuardianTarget guardian =
                 activeGuardian(1L, 11L, GuardianTarget.NOTIFICATION_MODE_REALTIME, 10);
@@ -411,7 +457,7 @@ class AnomalySchedulerTest {
                     + "(§4.2 확정: A — Guardian 개인별 자율성)")
     void escalate_multipleGuardiansDifferentThresholds_individualJudgement() {
         // given — 감지 후 15분 경과. Guardian A는 10분 기준(승격 대상), Guardian B는 60분 기준(아직 대상 아님)
-        AnomalyEvent event = openArrivalDelayEvent(Instant.now().minus(15, ChronoUnit.MINUTES));
+        AnomalyEvent event = openArrivalDelayEvent(clock.instant().minus(15, ChronoUnit.MINUTES));
         when(anomalyEventRepository.findByResolvedAtIsNull()).thenReturn(List.of(event));
         GuardianTarget guardianA =
                 activeGuardian(1L, 11L, GuardianTarget.NOTIFICATION_MODE_REALTIME, 10);
@@ -438,7 +484,7 @@ class AnomalySchedulerTest {
     @DisplayName("REPORT_ONLY 모드의 Guardian은 아무리 시간이 지나도 즉시 알림으로 승격되지 않는다")
     void escalate_modeReportOnly_neverEscalates() {
         // given
-        AnomalyEvent event = openArrivalDelayEvent(Instant.now().minus(6, ChronoUnit.HOURS));
+        AnomalyEvent event = openArrivalDelayEvent(clock.instant().minus(6, ChronoUnit.HOURS));
         when(anomalyEventRepository.findByResolvedAtIsNull()).thenReturn(List.of(event));
         GuardianTarget guardian =
                 activeGuardian(1L, 11L, GuardianTarget.NOTIFICATION_MODE_REPORT_ONLY, 10);
@@ -471,7 +517,7 @@ class AnomalySchedulerTest {
     @DisplayName("paused_until이 지난 Guardian은 잠금을 잡고 다시 확인하는 서비스(resumeIfDue)에 복귀를 맡긴다 — 스케줄러가 직접 저장하지 않는다")
     void resumePausedGuardians_pauseDue_delegatesToLockedResumeIfDue() {
         // given — paused_until = 1시간 30분 전(이미 지남)
-        pausedGuardian(Instant.now().minus(2, ChronoUnit.HOURS), 30);
+        pausedGuardian(clock.instant().minus(2, ChronoUnit.HOURS), 30);
         when(guardianNotificationSettingsService.resumeIfDue(eq(1L), any(Instant.class)))
                 .thenReturn(true);
 
@@ -487,7 +533,7 @@ class AnomalySchedulerTest {
     @DisplayName("paused_until이 아직 남은 Guardian은 복귀 요청 자체를 하지 않는다")
     void resumePausedGuardians_pauseNotYetDue_doesNotCallResume() {
         // given — paused_until = 지금부터 60분(아직 한참 남음)
-        GuardianTarget guardian = pausedGuardian(Instant.now(), 60);
+        GuardianTarget guardian = pausedGuardian(clock.instant(), 60);
 
         // when
         scheduler().tick();
@@ -503,7 +549,7 @@ class AnomalySchedulerTest {
     @DisplayName("오래된 목록상 복귀 대상이어도 그 사이 사용자가 연장/해제했다면(resumeIfDue=false) 아무 것도 하지 않고 tick이 정상 완료된다")
     void resumePausedGuardians_staleCandidateAlreadyHandled_isSkippedWithoutError() {
         // given — 목록은 "지남"이지만 잠금 후 재확인에서 이미 처리됨
-        pausedGuardian(Instant.now().minus(2, ChronoUnit.HOURS), 30);
+        pausedGuardian(clock.instant().minus(2, ChronoUnit.HOURS), 30);
         when(guardianNotificationSettingsService.resumeIfDue(eq(1L), any(Instant.class)))
                 .thenReturn(false);
 

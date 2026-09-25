@@ -1,9 +1,9 @@
 package com.tracecare.backend.domain.anomaly.service;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
@@ -54,7 +54,6 @@ import com.tracecare.backend.domain.visit.repository.VisitHistoryRepository;
 public class AnomalyScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(AnomalyScheduler.class);
-    private static final ZoneId ZONE = ZoneId.systemDefault();
 
     private final PlaceArrivalScheduleRepository placeArrivalScheduleRepository;
     private final AnomalyEventRepository anomalyEventRepository;
@@ -65,6 +64,7 @@ public class AnomalyScheduler {
     private final NotificationDispatchService notificationDispatchService;
     private final RedisTemplate<String, Object> redisTemplate;
     private final CacheKeyGenerator cacheKeyGenerator;
+    private final Clock clock;
     private final int arrivalDelayDetectMinutes;
     private final int scanPageSize;
     private final Duration lockTtl;
@@ -79,6 +79,7 @@ public class AnomalyScheduler {
             NotificationDispatchService notificationDispatchService,
             RedisTemplate<String, Object> redisTemplate,
             CacheKeyGenerator cacheKeyGenerator,
+            Clock clock,
             @Value("${anomaly.arrival-delay-detect-minutes}") int arrivalDelayDetectMinutes,
             @Value("${anomaly.arrival-delay-scan-page-size}") int scanPageSize,
             @Value("${anomaly.scheduler.lock-ttl-minutes}") long lockTtlMinutes) {
@@ -91,6 +92,7 @@ public class AnomalyScheduler {
         this.notificationDispatchService = notificationDispatchService;
         this.redisTemplate = redisTemplate;
         this.cacheKeyGenerator = cacheKeyGenerator;
+        this.clock = clock;
         this.arrivalDelayDetectMinutes = arrivalDelayDetectMinutes;
         this.scanPageSize = scanPageSize;
         this.lockTtl = Duration.ofMinutes(lockTtlMinutes);
@@ -119,8 +121,9 @@ public class AnomalyScheduler {
     // ---------------------------------------------------------------------
 
     private void detectArrivalDelays() {
-        int dayOfWeek = LocalDate.now(ZONE).getDayOfWeek().getValue();
-        Instant todayStart = LocalDate.now(ZONE).atStartOfDay(ZONE).toInstant();
+        LocalDate today = LocalDate.now(clock);
+        int dayOfWeek = today.getDayOfWeek().getValue();
+        Instant todayStart = today.atStartOfDay(clock.getZone()).toInstant();
 
         int pageNumber = 0;
         Page<ScheduledPlace> page;
@@ -146,12 +149,12 @@ public class AnomalyScheduler {
         }
 
         Instant expectedAt =
-                LocalDate.now(ZONE)
+                LocalDate.now(clock)
                         .atTime(scheduled.getExpectedArrivalTime())
-                        .atZone(ZONE)
+                        .atZone(clock.getZone())
                         .toInstant();
         Instant deadline = expectedAt.plus(arrivalDelayDetectMinutes, ChronoUnit.MINUTES);
-        if (Instant.now().isBefore(deadline)) {
+        if (clock.instant().isBefore(deadline)) {
             return;
         }
         if (anomalyEventRepository
@@ -172,7 +175,7 @@ public class AnomalyScheduler {
     }
 
     private void resolveArrivalDelay(AnomalyEvent event) {
-        event.resolve(Instant.now());
+        event.resolve(clock.instant());
         anomalyEventRepository.save(event);
         log.info(
                 "event=ANOMALY_ARRIVAL_DELAY_RESOLVED, careTargetId={}, anomalyEventId={}",
@@ -185,7 +188,7 @@ public class AnomalyScheduler {
     // ---------------------------------------------------------------------
 
     private void escalate() {
-        Instant now = Instant.now();
+        Instant now = clock.instant();
         List<AnomalyEvent> openEvents = anomalyEventRepository.findByResolvedAtIsNull();
         for (AnomalyEvent event : openEvents) {
             List<GuardianTarget> guardians =
@@ -239,7 +242,7 @@ public class AnomalyScheduler {
     // ---------------------------------------------------------------------
 
     private void resumePausedGuardians() {
-        Instant now = Instant.now();
+        Instant now = clock.instant();
         List<GuardianTarget> paused =
                 guardianTargetRepository.findByNotificationMode(
                         GuardianTarget.NOTIFICATION_MODE_PAUSED);
