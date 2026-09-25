@@ -84,7 +84,27 @@ public interface AnomalyEventRepository extends JpaRepository<AnomalyEvent, Long
             @Param("minLng") BigDecimal minLng,
             @Param("maxLng") BigDecimal maxLng);
 
-    /** HYBRID 미승격 이상행동을 {@code /summary}에 포함시키기 위한 조회(§15.2). */
-    List<AnomalyEvent> findByUserIdAndDetectedAtBetweenAndEscalatedAtIsNull(
-            Long userId, Instant from, Instant to);
+    /**
+     * {@code /summary}·{@code /report/weekly} 기간 내 이상행동(§3.6) — 기간과 <b>겹치는</b> 이벤트: {@code detected_at <= to}
+     * 이고 ({@code resolved_at IS NULL} 또는 {@code resolved_at >= from}). 기간 이전에 감지돼 지금도 진행 중인 이벤트를 포함한다.
+     * 진행 중(미해소) 우선, 그다음 {@code detected_at} 내림차순. 상한은 {@code Pageable}로 건다.
+     */
+    @Query(
+            "SELECT ae FROM AnomalyEvent ae "
+                    + "WHERE ae.userId = :userId AND ae.detectedAt <= :to "
+                    + "AND (ae.resolvedAt IS NULL OR ae.resolvedAt >= :from) "
+                    + "ORDER BY CASE WHEN ae.resolvedAt IS NULL THEN 0 ELSE 1 END, ae.detectedAt DESC")
+    List<AnomalyEvent> findOverlapping(
+            @Param("userId") Long userId,
+            @Param("from") Instant from,
+            @Param("to") Instant to,
+            Pageable pageable);
+
+    /** {@link #findOverlapping}과 같은 겹침 조건의 총 건수({@code anomalyCount}). */
+    @Query(
+            "SELECT COUNT(ae) FROM AnomalyEvent ae "
+                    + "WHERE ae.userId = :userId AND ae.detectedAt <= :to "
+                    + "AND (ae.resolvedAt IS NULL OR ae.resolvedAt >= :from)")
+    long countOverlapping(
+            @Param("userId") Long userId, @Param("from") Instant from, @Param("to") Instant to);
 }

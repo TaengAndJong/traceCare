@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -17,16 +18,20 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.support.AbstractPlatformTransactionManager;
+import org.springframework.transaction.support.DefaultTransactionStatus;
 
 import com.tracecare.backend.common.exception.ErrorCode;
 import com.tracecare.backend.common.exception.auth.AccessDeniedCustomException;
 import com.tracecare.backend.common.exception.business.VisitHistoryNotFoundException;
 import com.tracecare.backend.common.exception.validation.InvalidRequestException;
+import com.tracecare.backend.domain.anomaly.service.AnomalySummaryQueryService;
 import com.tracecare.backend.domain.auth.entity.User;
 import com.tracecare.backend.domain.auth.repository.UserRepository;
 import com.tracecare.backend.domain.chat.client.EmbeddingClient;
@@ -63,6 +68,23 @@ class AiChatServiceTest {
     @Mock private EmbeddingClient embeddingClient;
     @Mock private LlmClient llmClient;
     @Mock private VisitHistoryRepository visitHistoryRepository;
+    @Mock private AnomalySummaryQueryService anomalySummaryQueryService;
+
+    /** 이 테스트들은 이상행동이 없는 기간을 기본으로 한다(이상행동 시나리오는 AiChatServiceSummaryAnomalyTest). */
+    @BeforeEach
+    void stubNoAnomalies() {
+        lenient()
+                .when(anomalySummaryQueryService.find(anyLong(), anyLong(), any(), any()))
+                .thenReturn(new AnomalySummaryQueryService.Result(0, List.of()));
+    }
+
+    /** 실제 트랜잭션 없이 begin/commit만 통과시키는 매니저 — TransactionTemplate이 Mockito 환경에서도 동작하게 한다. */
+    private static final class NoOpTransactionManager extends AbstractPlatformTransactionManager {
+        @Override protected Object doGetTransaction() { return new Object(); }
+        @Override protected void doBegin(Object transaction, org.springframework.transaction.TransactionDefinition definition) {}
+        @Override protected void doCommit(DefaultTransactionStatus status) {}
+        @Override protected void doRollback(DefaultTransactionStatus status) {}
+    }
 
     private AiChatService service() {
         return new AiChatService(
@@ -72,7 +94,9 @@ class AiChatServiceTest {
                 chatEmbeddingStore,
                 embeddingClient,
                 llmClient,
-                visitHistoryRepository);
+                visitHistoryRepository,
+                anomalySummaryQueryService,
+                new NoOpTransactionManager());
     }
 
     private void stubActiveTarget(UUID targetPublicId) {
