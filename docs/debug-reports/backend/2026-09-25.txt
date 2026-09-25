@@ -43,3 +43,31 @@
 [정리]
 - 시드 데이터 TRUNCATE 완료(User/GuardianTarget/Place/VisitHistory/AnomalyEvent/NotificationHistory, RESTART IDENTITY).
 - Redis 키 변경 없음(diff 확인), 서버 종료 확인(8080 미사용).
+
+----------------------------------------------------------------
+[추가 세션] AnomalyService.loadPlaces() NPE 수정 + tracecare-redis 포트 문제 원인 정정
+----------------------------------------------------------------
+
+[조사한 문제]
+- §4.5 통합 테스트에서 발견한 Map.of().get(null) NPE가 §4.3 AnomalyService.loadPlaces()에도 있는지 확인.
+
+[시도 순서와 결과]
+1. 재현 테스트 먼저 작성(한 페이지의 모든 이벤트가 place_id null): 수정 전 코드에서 실제 NPE 재현
+   (ImmutableCollections$MapN.get <- AnomalyService.getAnomalies, AnomalyService.java:150).
+2. loadPlaces의 빈 경우 반환값을 Map.of() -> new HashMap<>()으로 수정 -> 재현 테스트 통과.
+3. 같은 클래스/main 전체에서 같은 패턴 확인: AnomalyService의 다른 Map 사용은 Collectors.toMap(HashMap)뿐이라
+   get(null) 안전. main 전체에 남은 Map.of()는 없음(두 곳 모두 HashMap 주석만 존재). 추가 수정 없음.
+4. 전체 스위트(UTC): 236건 통과(기존 235 + 회귀 1).
+
+[확인된 원인] 코드 버그(§4.3 유래). 운영 영향 조건: 한 페이지의 이벤트가 전부 place_id null일 때(예: UNREGISTERED_STAY만 있고
+  가장 가까운 등록 장소가 없는 CareTarget의 목록 조회 -> 500).
+
+[변경한 파일] AnomalyService.java(loadPlaces), AnomalyServiceTest.java(회귀 테스트 1건). 커밋: fix: AnomalyService.loadPlaces() 빈 장소 목록 NPE 수정
+
+[정정 기록] tracecare-redis 호스트 포트(6379) 게시 누락 문제 — "원인 미확정/추정" -> "원인 확인 완료"
+- 이전 기록: 2026-09-10, 2026-09-20 리포트에는 원인을 "다른 프로젝트 점유 중 생성되어 포트 게시 누락(추정)"으로 적었고
+  근본 원인은 미확정 상태였다(과거 리포트 본문은 이력 보존을 위해 수정하지 않음).
+- 확정: 다른 프로젝트(facelogin)가 같은 포트(6379)를 먼저 점유하고 있을 때 발생한 단순 포트 충돌이다.
+  코드/설정 문제가 아니며 docker-compose.yml은 원래부터 올바르다. 실행 순서로 해결 가능
+  (tracecare-redis를 먼저 기동하거나, facelogin 종료 후 `docker compose up -d redis`로 컨테이너 재생성).
+- 이 확정은 사용자 확인에 따른 것이며 이번 세션에서 재현 실험은 하지 않았다. 코드/설정 변경 없음.
