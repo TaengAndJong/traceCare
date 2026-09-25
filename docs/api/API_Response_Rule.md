@@ -219,7 +219,9 @@ REST 관례상 HTTP Status와 Response Body의 `success`는 항상 일치해야 
 | 401 Unauthorized | 인증 실패 — 토큰 없음, 만료, 위변조, 재로그인 필요 | JWT 만료로 API 호출 실패, Access Token 없이 요청 |
 | 403 Forbidden | 인증은 되었으나 접근 권한이 없는 경우 | CareTarget이 Guardian 전용 API 호출, 다른 보호자의 보호대상자 리소스 접근, 관계 미매핑 |
 | 404 Not Found | 요청한 리소스가 존재하지 않음 | 존재하지 않는 careTargetId 조회, 삭제된 장소 조회 |
+| 405 Method Not Allowed | 존재하는 URI에 허용되지 않은 HTTP Method로 호출(`COMMON_004`) | `POST`만 받는 API를 `GET`으로 호출 |
 | 409 Conflict | 리소스 상태 충돌, 중복 등록 | 이미 매핑된 보호자-대상자 관계 중복 등록, 이미 등록된 장소명 중복 |
+| 415 Unsupported Media Type | 지원하지 않는 요청 본문 형식(`Content-Type`)으로 호출(`COMMON_009`) | JSON API에 `text/plain`/`application/xml` 본문 전송 |
 | 500 Internal Server Error | 서버 내부 오류, 예상치 못한 예외 | DB 연결 실패, NPE 등 처리되지 않은 예외 |
 
 ### 4.1 401 vs 403 구분 (이 프로젝트의 핵심 판단 기준)
@@ -262,6 +264,9 @@ REST 관례상 HTTP Status와 Response Body의 `success`는 항상 일치해야 
 | COMMON_006 | 403 | 요청자의 Role로는 접근할 수 없는 API 호출 (Guardian API 이외의 Role 전용 API) |
 | COMMON_007 | 503 | Redis가 Source of Truth인 세션/보안 데이터(Refresh Token, JWT Blacklist) 접근 중 Redis 장애 발생 (Exception_Handling_Rule.md §10.4, 폴백 없이 명시적 실패 처리) |
 | COMMON_008 | 409 | 동시 요청과 충돌해 트랜잭션이 직렬화 실패함(`PessimisticLockingFailureException`) — 서버 오류가 아니라 정상적인 동시성 경합이므로 클라이언트가 잠시 후 재시도하면 해결됨. 특정 도메인에 국한되지 않고 `REPEATABLE READ` 격리 수준을 쓰는 트랜잭션 전반에서 재발할 수 있어 `COMMON` 도메인에 둠 |
+| COMMON_009 | 415 | 지원하지 않는 요청 본문 형식(`Content-Type`)으로 호출(`HttpMediaTypeNotSupportedException`). 이 API는 JSON(`application/json`) 본문만 받는다. 응답 `message`는 고정 문구이며 요청의 미디어 타입 원문을 담지 않는다 |
+
+> **프레임워크 라우팅/협상 단계 예외(2026-09)**: 존재하지 않는 URI(`NoResourceFoundException`)는 `COMMON_003`(404), 허용되지 않은 HTTP Method(`HttpRequestMethodNotSupportedException`)는 `COMMON_004`(405), 지원하지 않는 `Content-Type`(`HttpMediaTypeNotSupportedException`)은 `COMMON_009`(415)로 응답한다. 이전에는 이 셋이 처리되지 않은 예외로 분류돼 500(`COMMON_001`)으로 나갔다. 셋 모두 예상 가능한 클라이언트 오류라 서버 로그는 WARN(스택 트레이스 없음)이며, 응답 `message`에 요청 URI/Method/미디어 타입 원문을 넣지 않는다. 인증되지 않은 요청은 이 예외보다 먼저 `SecurityConfig`가 401로 처리하므로 이 세 코드는 인증된 요청에서만 나타난다. `Accept` 불일치(`HttpMediaTypeNotAcceptableException`, 406)는 이번 범위에서 제외했다(API가 항상 JSON만 응답).
 
 #### 인증 (AUTH)
 

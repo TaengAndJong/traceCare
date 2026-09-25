@@ -368,6 +368,7 @@ log.error("event=SYSTEM_EXCEPTION, code={}", errorCode, e); // e를 마지막 �
 | 분류 | 처리 |
 |---|---|
 | Validation Exception | WARN, 실패한 필드 목록 기록(요청 바디 전체는 미기록) |
+| 프레임워크 라우팅/협상 단계 예외(존재하지 않는 URI 404, 허용 안 된 Method 405, 지원 안 하는 Content-Type 415) | WARN, 스택 트레이스 없음, `event=HTTP_REQUEST_REJECTED, code={COMMON_003/004/009}`만 기록(URI/Method/미디어 타입 원문은 남기지 않는다 — 스캐너성 요청이 로그를 오염시키고 경로에 식별자가 섞일 수 있어서) |
 | Business Exception | WARN, ErrorCode + 관련 식별자 |
 | Authentication/Authorization Exception (Service 계층에서 발생하는 것) | WARN, `event=RESOURCE_ACCESS_DENIED`(5.2절) 사용 — `ACCESS_DENIED`는 Role 불일치(2단계, Filter의 `AccessDeniedHandler`)에서 쓰는 이벤트명이라 GlobalExceptionHandler 로그 대상이 아니다(Exception Handling Rule §8.1 확정 구조 참고) |
 | External Service Exception | ERROR, 대상 서비스명(`targetService`) 포함 |
