@@ -191,7 +191,12 @@ RuntimeException
      ├─ ErrorCode errorCode        // API Response Rule의 Error Code Enum 참조 (예: TARGET_001, PLACE_002)
      ├─ HttpStatus httpStatus
      │
-     ├─ InvalidRequestException          (400)  # 6장 — 주로 COMMON_002, 도메인별 400(LOCATION_001, PLACE_003, ARRIVAL_002, ANOMALY_002 등)
+     ├─ InvalidRequestException          (400)  # 6장 — 주로 COMMON_002(타입 불일치, @Min/@Max 위반 등 단순 형식 검증 실패)
+     ├─ InvalidLocationCoordinateException (400) # LOCATION_001 — 도메인 고유 규칙 위반(각주 [1])
+     ├─ InvalidPlaceRangeException       (400)  # PLACE_003 — 도메인 고유 규칙 위반(각주 [1])
+     ├─ InvalidAnomalyQuestionException  (400)  # ANOMALY_002 — 도메인 고유 규칙 위반(각주 [1])
+     ├─ ArrivalNotRegisteredException    (400)  # ARRIVAL_002 — 같은 패턴(각주 [1])
+     ├─ EmergencyContactMissingException (400)  # EMERGENCY_002 — 같은 패턴(각주 [1])
      ├─ AuthenticationFailedException     (401)  # 8장 — AUTH_001~AUTH_006
      ├─ AccessDeniedCustomException       (403)  # 8장 3단계(리소스 소유권)만 대상 — TARGET_002, LOCATION_003/004, ARRIVAL_001, EMERGENCY_001. 이상행동 목록/설명(`/api/guardian/anomalies/**`)의 소유권 위반도 신규 예외/코드 없이 이 클래스의 기존 `TARGET_002`를 그대로 쓴다. GUARDIAN_001(Role 불일치, 2단계)은 Filter의 AccessDeniedHandler가 직접 처리하므로 이 예외 클래스를 거치지 않는다
      ├─ ResourceNotFoundException         (404)
@@ -206,6 +211,8 @@ RuntimeException
      ├─ EmergencyDispatchException        (500)  # 9장 — EMERGENCY_003, fail-safe 대상(9.2 참고)
      └─ DataAccessCustomException         (500)  # 10장 — COMMON_001
 ```
+
+> **[1] 도메인 전용 400 예외는 `InvalidRequestException`의 하위가 아니다.** `InvalidRequestException`은 주로 단순 형식 검증 실패(타입 불일치, `@Min`/`@Max` 위반 등)에 쓰는 범용 클래스이고, `InvalidAnomalyQuestionException`/`InvalidLocationCoordinateException`/`InvalidPlaceRangeException` 3개는 각 도메인 고유의 비즈니스 규칙 위반이라 **의도적으로 `BusinessException`을 직접 상속하는 별도 클래스**로 분리했다(§4.3 결정). 이 계층도는 실제 코드가 아니라 그림만 낡아 있던 것을 바로잡은 것이며, 이전 그림은 이 클래스들이 `InvalidRequestException` 하위인 것처럼 읽혀 새 예외를 잘못된 상속 관계로 설계하게 만들 수 있었다. 향후 도메인 전용 400 예외를 새로 만들 때는 이 3개를 참고 패턴으로 삼는다(`ArrivalNotRegisteredException`/`EmergencyContactMissingException`도 같은 구조다). `ErrorCode`가 `httpStatus`를 갖고 있어 상위 클래스가 달라도 응답 Status는 동일하다.
 
 **설계 원칙**
 

@@ -152,7 +152,7 @@
 | AI_001 | AI 응답 생성 성공 — LLM/AI 서버 응답에만 사용한다. **`/explain`(이상행동 설명)은 LLM을 호출하지 않는 고정 질문 템플릿 방식으로 확정되어(2026-09-20) 더 이상 이 코드를 쓰지 않는다**(`ANOMALY_*` 사용, API_Specification.md §7.3) |
 | ANOMALY_001 | 이상행동 목록 조회 성공(`GET /api/guardian/anomalies`, API_Specification.md §3.9) — 5.1절과 동일하게 `ErrorCode.ANOMALY_001`(404)과는 별도 번호 공간 |
 | ANOMALY_002 | 이상행동 설명 조회 성공(`GET /api/guardian/anomalies/{anomalyEventId}/explain`) — 고정 질문 템플릿에 대한 답변(`answer`)을 반환 |
-| ANOMALY_003 | 이상행동 질문 카탈로그 조회 성공(`GET /api/guardian/anomalies/questions`) |
+| ANOMALY_003 | 이상행동 질문 목록 조회 성공(`GET /api/guardian/anomalies/questions`) |
 | VISIT_001 | 방문 히스토리 조회 성공(§8.7) — 5.1절과 동일하게 `ErrorCode.VISIT_001`(404)과는 별도 번호 공간 |
 | ARRIVAL_001 | 도착 확인 성공(§8.8) — `ErrorCode.ARRIVAL_001`(403, Guardian 호출)과는 별도 번호 공간 |
 | EMERGENCY_001 | 긴급 연락(전화/문자/위치) 발송 성공(§8.9) — `ErrorCode.EMERGENCY_001`(403, Guardian 호출)과는 별도 번호 공간. call/message/location 세 엔드포인트가 의미상 동일한 액션(보호자에게 긴급 상황을 알림)이라 코드를 통일했다 |
@@ -349,7 +349,7 @@ REST 관례상 HTTP Status와 Response Body의 `success`는 항상 일치해야 
 
 | code | HTTP Status | 상황 |
 |---|---|---|
-| VISIT_001 | 404 | 조회 조건(날짜/장소)에 해당하는 방문 이력이 없음 |
+| VISIT_001 | 404 | 조회 조건(날짜/장소)에 해당하는 방문 이력이 없음. `/api/guardian/ai/summary`·`/report/weekly`는 **요청 기간(`/report/weekly`는 최근 7일)에 방문 기록과 이상행동이 모두 없을 때만** 이 코드를 반환한다(방문 기록이 없어도 이상행동이 있으면 200, API_Specification.md §3.6). `/api/guardian/ai/search`는 대상에 방문 이력이 아예 없을 때 반환한다 |
 | VISIT_002 | 400 | 조회 기간(시작일-종료일) 값이 유효 범위를 벗어남 |
 
 #### 도착 확인 (ARRIVAL)
@@ -479,7 +479,13 @@ public enum SuccessCode {
     PLACE_003("PLACE_003", "장소(안심구역) 삭제 성공"),
     NOTI_001("NOTI_001", "알림 조회 성공"),
     NOTI_002("NOTI_002", "알림 읽음 처리 성공"),
-    AI_001("AI_001", "AI 응답 생성 성공");
+    AI_001("AI_001", "AI 응답 생성 성공"),
+    VISIT_001("VISIT_001", "방문 히스토리 조회 성공"),
+    ANOMALY_001("ANOMALY_001", "이상행동 목록 조회 성공"),
+    ANOMALY_002("ANOMALY_002", "이상행동 설명 조회 성공"),
+    ANOMALY_003("ANOMALY_003", "이상행동 질문 목록 조회 성공"),
+    ARRIVAL_001("ARRIVAL_001", "도착 확인 성공"),
+    EMERGENCY_001("EMERGENCY_001", "긴급 연락 발송 성공");
 
     private final String code;
     private final String message;
@@ -565,7 +571,18 @@ public enum ErrorCode {
     // AI
     AI_001("AI_001", HttpStatus.INTERNAL_SERVER_ERROR, "AI 서버 응답이 지연되고 있습니다"),
 
+    // Visit
+    VISIT_001("VISIT_001", HttpStatus.NOT_FOUND, "조회 가능한 방문 이력이 없습니다"),
+
+    // Anomaly
+    ANOMALY_001("ANOMALY_001", HttpStatus.NOT_FOUND, "이상행동 정보를 찾을 수 없습니다"),
+    ANOMALY_002("ANOMALY_002", HttpStatus.BAD_REQUEST, "지원하지 않는 질문입니다"),
+
+    // Arrival
+    ARRIVAL_001("ARRIVAL_001", HttpStatus.FORBIDDEN, "보호대상자만 도착 확인을 할 수 있습니다"),
+
     // Emergency
+    EMERGENCY_001("EMERGENCY_001", HttpStatus.FORBIDDEN, "보호대상자만 긴급 연락을 할 수 있습니다"),
     EMERGENCY_003("EMERGENCY_003", HttpStatus.INTERNAL_SERVER_ERROR, "긴급 연락 발송에 실패했습니다. 다시 시도해주세요");
 
     private final String code;
