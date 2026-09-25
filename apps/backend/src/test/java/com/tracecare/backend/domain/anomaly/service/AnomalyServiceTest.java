@@ -251,6 +251,39 @@ class AnomalyServiceTest {
     }
 
     @Test
+    @DisplayName("한 페이지의 모든 이벤트가 place_id null이어도 NPE 없이 placeId/placeName이 null이고 Place는 조회하지 않는다")
+    void getAnomalies_allEventsWithoutPlaceId_returnsNullPlaceFieldsWithoutNpe() {
+        // given — nearest place가 없는 UNREGISTERED_STAY만 있는 페이지(placeIds가 비어 loadPlaces가 빈 맵을 반환)
+        givenTargetFound();
+        givenActiveRelation();
+        Pageable pageable = PageRequest.of(0, 20);
+        AnomalyEvent noPlace =
+                AnomalyEvent.createUnregisteredStay(
+                        TARGET_ID,
+                        null,
+                        BigDecimal.valueOf(37.5),
+                        BigDecimal.valueOf(127.0),
+                        DETECTED_AT,
+                        SCHEDULED_AT);
+        ReflectionTestUtils.setField(noPlace, "id", EVENT_ID);
+        when(anomalyEventRepository.findByUserIdAndDetectedAtBetweenOrderByDetectedAtDesc(
+                        eq(TARGET_ID), any(), any(), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(noPlace), pageable, 1));
+
+        // when
+        AnomalyEventResponse response =
+                service()
+                        .getAnomalies(GUARDIAN_ID, targetPublicId, null, null, null, pageable)
+                        .getContent()
+                        .get(0);
+
+        // then
+        assertThat(response.getPlaceId()).isNull();
+        assertThat(response.getPlaceName()).isNull();
+        verify(placeRepository, never()).findAllById(any());
+    }
+
+    @Test
     @DisplayName("기간을 지정하지 않으면 to=현재, from=to−7일 기본 창으로 조회한다")
     void getAnomalies_noPeriod_usesDefaultSevenDayWindow() {
         // given

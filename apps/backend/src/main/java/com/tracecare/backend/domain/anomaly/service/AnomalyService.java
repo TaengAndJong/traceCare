@@ -6,6 +6,7 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -154,7 +155,8 @@ public class AnomalyService {
         List<Long> placeIds =
                 events.stream().map(AnomalyEvent::getPlaceId).filter(id -> id != null).distinct().toList();
         if (placeIds.isEmpty()) {
-            return Map.of();
+            // Map.of()는 get(null)이 NPE라 쓰지 않는다 — place_id가 null인 이벤트(UNREGISTERED_STAY 등)를 조회하기 때문이다.
+            return new HashMap<>();
         }
         return placeRepository.findAllById(placeIds).stream()
                 .collect(Collectors.toMap(Place::getId, Function.identity()));
